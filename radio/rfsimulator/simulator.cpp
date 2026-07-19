@@ -105,7 +105,7 @@ typedef enum { SIMU_ROLE_SERVER = 1, SIMU_ROLE_CLIENT } simuRole;
   INTPARAM(RFSIMU_NUM_CONCURRENT_BEAMS, "<number of concurrent beams supported>\n", simOpt, NULL,                             1),                     \
   UINT64PARAM(RFSIMU_BEAM_MAP,          "<initial beam map>\n",                     simOpt, NULL,                             1),                     \
   STRINGPARAM(RFSIMU_BEAM_IDS,          "<initial beam ids>\n",                     simOpt, NULL,                             NULL),                  \
-  STRINGPARAM(RFSIMU_BEAM_GAINS,        "<beam gain matrix in toeplitz form>\n",    simOpt, NULL,                             NULL),                  \
+  STRINGPARAM(RFSIMU_BEAM_GAINS,        "<beam gain matrix in toeplitz form>\n",    simOpt, NULL,                             NULL),\
 };
 // clang-format on
 static void getset_currentchannels_type(char *buf, int debug, webdatadef_t *tdata, telnet_printfunc_t prnt);
@@ -602,6 +602,7 @@ static void rfsimulator_readconfig(rfsimulator_state_t *rfsimulator)
     rfsimulator->role = SIMU_ROLE_SERVER;
   else
     rfsimulator->role = SIMU_ROLE_CLIENT;
+
 }
 
 static int rfsimu_set_beam(char *buff, int debug, telnet_printfunc_t prnt, void *arg)
@@ -1321,7 +1322,7 @@ static void rfsimulator_read_internal(rfsimulator_state_t *t,
                                input);
 
         for (int aarx = 0; aarx < nbAnt; aarx++) {
-          rxAddInput(input, temp_array[aarx], aarx, ptr->channel_model, nsamps);
+          rxAddInput_srsfile(input, temp_array[aarx], aarx, ptr->channel_model, nsamps);
         }
       } else {
         if (is_first_beam && is_first_peer && (ptr->nbAnt == 1 && nbAnt == 1)) {

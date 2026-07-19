@@ -850,6 +850,17 @@ static void handle_srs(fsn_t now, PHY_VARS_gNB *gNB, const NR_gNB_SRS_job_t *srs
                                                 &timing_advance_offset,
                                                 timing_advance_offset_nsec);
 
+  do {
+    extern void dump_srs_channel(const c16_t *, int, int, int, int, int, int, uint32_t, int, int);
+    uint32_t slot_id = (uint32_t)(now.f * 1024 + now.s);
+    dump_srs_channel((const c16_t *)srs_estimated_channel_freq,
+                     (int)nb_antennas_rx, (int)N_ap,
+                     (int)frame_parms->ofdm_symbol_size,
+                     (int)N_symb_SRS, (int)frame_parms->ofdm_symbol_size, 0,
+                     slot_id,
+                     (int)frame_parms->N_RB_UL,
+                     (int)frame_parms->subcarrier_spacing);
+  } while (0);
   if ((snr * 10) < gNB->srs_thres) {
     srs_est = -1;
   }

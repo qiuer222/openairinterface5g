@@ -106,6 +106,11 @@ void nr_freq_equalization(NR_DL_FRAME_PARMS *frame_parms,
                           unsigned char Qm);
 
 void nr_init_fde(void);
+void dump_srs_channel(const c16_t *h_flat,
+                       int nrx, int ntx, int fft_size,
+                       int n_symb, int n_subcarriers, int subcarrier_offset,
+                       uint32_t slot_number,
+                       int n_rb, int subcarrier_spacing);
 
 #endif
 /** @}*/

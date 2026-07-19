@@ -383,12 +383,6 @@ endif()
 add_boolean_option(ENABLE_IMSCOPE OFF "Enable phy scope based on imgui" OFF)
 add_boolean_option(ENABLE_IMSCOPE_RECORD OFF "Enable recording IQ data for imscope" OFF)
 
-#########################
-##### E3 AGENT
-#########################
-set(E3_AGENT "OFF" CACHE STRING "O-RAN nGRG E3 Agent for dApps")
-set_property(CACHE E3_AGENT PROPERTY STRINGS "ON" "OFF")
-
 ##################################################
 # ASN.1 grammar C code generation & dependencies #
 ##################################################
@@ -936,6 +930,7 @@ set(PHY_SRC_UE
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/dmrs_nr.c
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/ptrs_nr.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_ul_channel_estimation.c
+  ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/srs_channel_dump.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_freq_equalization.c
   ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/nr_measurements_gNB.c
   ${OPENAIR1_DIR}/PHY/TOOLS/file_output.c
@@ -1835,11 +1830,6 @@ endif()
 if(E2_AGENT)
   target_link_libraries(nr-softmodem PUBLIC e2_agent e2_agent_arg e2_ran_func_du_cucp_cuup)
   target_compile_definitions(nr-softmodem PRIVATE ${E2AP_VERSION} ${KPM_VERSION} E2_AGENT)
-endif()
-
-if (E3_AGENT)
-    target_link_libraries(nr-softmodem PRIVATE e3ap)
-    target_compile_definitions(nr-softmodem PRIVATE E3_AGENT)
 endif()
 
 
