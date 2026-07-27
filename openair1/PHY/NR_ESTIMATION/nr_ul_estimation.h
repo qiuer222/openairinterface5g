@@ -110,7 +110,8 @@ void dump_srs_channel(const c16_t *h_flat,
                        int nrx, int ntx, int fft_size,
                        int n_symb, int n_subcarriers, int subcarrier_offset,
                        uint32_t slot_number,
-                       int n_rb, int subcarrier_spacing);
+                       int n_rb, int subcarrier_spacing,
+                       int max_slots);
 
 #endif
 /** @}*/

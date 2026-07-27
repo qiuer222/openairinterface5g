@@ -82,22 +82,40 @@ int rfsim_load_srs_file(const char *path) {
   srs_replay.fft_size  = hdr.fft_size;
   srs_replay.n_sc      = hdr.n_subcarriers;
   srs_replay.sc_off    = hdr.subcarrier_offset;
-  srs_replay.num_slots = hdr.num_slots_recorded;
+  // Limit loaded slots to avoid excessive memory use with continuous recording
+  static const int MAX_REPLAY_SLOTS = 100;
+  int total_slots = hdr.num_slots_recorded;
+  int load_count = (total_slots > MAX_REPLAY_SLOTS) ? MAX_REPLAY_SLOTS : total_slots;
+  int skip_count = total_slots - load_count;
+
+  srs_replay.num_slots = load_count;
   srs_replay.current_slot = 0;
 
   int h_per_slot = hdr.num_rx_ant * hdr.num_tx_ant * hdr.n_subcarriers;
-  srs_replay.h_data = calloc(hdr.num_slots_recorded * h_per_slot, sizeof(c16_t));
+  int slot_data_bytes = h_per_slot * (int)sizeof(c16_t);
+  int slot_total_bytes = (int)sizeof(uint32_t) + slot_data_bytes;
+
+  // Skip old slots if the file has more than MAX_REPLAY_SLOTS
+  if (skip_count > 0) {
+    fseek(fp, skip_count * slot_total_bytes, SEEK_CUR);
+  }
+
+  srs_replay.h_data = calloc(load_count * h_per_slot, sizeof(c16_t));
   if (!srs_replay.h_data) { fclose(fp); return -1; }
 
-  for (int s = 0; s < hdr.num_slots_recorded; s++) {
+  for (int s = 0; s < load_count; s++) {
     // Skip per-slot header (uint32_t slot_number)
     uint32_t slot_hdr;
     if (fread(&slot_hdr, sizeof(slot_hdr), 1, fp) != 1) { fclose(fp); return -1; }
     c16_t *dst = srs_replay.h_data + (size_t)s * h_per_slot;
-    size_t sz = (size_t)h_per_slot * sizeof(c16_t);
+    size_t sz = (size_t)slot_data_bytes;
     if (fread(dst, 1, sz, fp) != sz) { fclose(fp); return -1; }
   }
   fclose(fp);
+
+  if (skip_count > 0) {
+    LOG_I(HW, "[rfsim] Skipped %d old slots, loaded last %d of %d recorded\n", skip_count, load_count, total_slots);
+  }
 
   srs_replay.loaded = 1;
   srs_replay_loaded = 1;
@@ -118,10 +136,10 @@ int rfsim_load_srs_file(const char *path) {
 void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
                          int rxAnt, channel_desc_t *channelDesc, int nbSamples) {
 
-  // First call: if SRS_CHANNEL_FILE env var is set, try to load it.
+  // First call: if CHANNEL_FILE env var is set, try to load it.
   // If file loads → SRS replay. If not set or load fails → fall back to rxAddInput.
   if (!srs_replay.loaded) {
-    const char *srs_path = getenv("SRS_CHANNEL_FILE");
+    const char *srs_path = getenv("CHANNEL_FILE");
     if (srs_path) {
       if (rfsim_load_srs_file(srs_path) != 0) {
         LOG_W(HW, "Failed to load SRS channel file: %s\n", srs_path);

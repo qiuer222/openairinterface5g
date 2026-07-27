@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "executables/nr-softmodem-common.h"
+#include "executables/nr-uesoftmodem.h"
 #include "nr_transport_proto_ue.h"
 #include "PHY/NR_REFSIG/nr_refsig.h"
 #include "common/utils/nr/nr_common.h"
@@ -246,6 +247,130 @@ uint32_t calc_power_csirs(const uint16_t *x, const fapi_nr_dl_config_csirs_pdu_r
     size++;
   }
   return sum_x2 / size - (sum_x / size) * (sum_x / size);
+}
+
+
+/* CSI-RS channel recording - dump interpolated channel estimates to binary file
+   for later replay in RFSim (same format as SRS channel dump) */
+static void write_csi_header_and_slot(FILE *fp,
+                                         const c16_t *h_data,
+                                         int nrx, int ntx, int fft_size,
+                                         int n_rb, int subcarrier_spacing,
+                                         uint32_t slot_count_val)
+{
+  struct __attribute__((packed)) {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t  num_rx_ant;
+    uint8_t  num_tx_ant;
+    uint16_t fft_size;
+    uint16_t n_rb;
+    uint32_t subcarrier_spacing;
+    uint32_t num_slots_recorded;
+    uint16_t n_subcarriers;
+    uint16_t subcarrier_offset;
+    uint8_t  n_csi_symbols;
+    uint8_t  reserved[23];
+  } hdr = { .magic = 0x48534D52, .version = 1,
+            .num_rx_ant = (uint8_t)nrx, .num_tx_ant = (uint8_t)ntx,
+            .fft_size = (uint16_t)fft_size, .n_rb = (uint16_t)n_rb,
+            .subcarrier_spacing = (uint32_t)subcarrier_spacing,
+            .num_slots_recorded = slot_count_val,
+            .n_subcarriers = (uint16_t)fft_size,
+            .subcarrier_offset = 0,
+            .n_csi_symbols = 1 };
+  fwrite(&hdr, sizeof(hdr), 1, fp);
+
+  uint32_t slot_num = 0;
+  fwrite(&slot_num, sizeof(slot_num), 1, fp);
+
+  for (int ra = 0; ra < nrx; ra++)
+    for (int ta = 0; ta < ntx; ta++) {
+      const c16_t *h_ptr = h_data + (size_t)(ra * ntx + ta) * (size_t)fft_size;
+      fwrite(h_ptr, sizeof(c16_t), fft_size, fp);
+    }
+}
+
+static void dump_csi_rs_channel(const c16_t *h_data,
+                                 int nrx, int ntx, int fft_size,
+                                 int n_rb, int subcarrier_spacing,
+                                 int max_slots)
+{
+  /* --- Single-slot mode: rewrite file every time, always 1 slot --- */
+  if (max_slots == 1) {
+    FILE *fp = fopen("/tmp/csi_rs_channel.bin", "wb");
+    if (!fp) return;
+    write_csi_header_and_slot(fp, h_data, nrx, ntx, fft_size,
+                              n_rb, subcarrier_spacing, 1);
+    fclose(fp);
+    return;
+  }
+
+  /* --- Burst mode: record max_slots slots then stop --- */
+  static FILE *csi_dump_fp = NULL;
+  static int csi_dump_count = 0;
+  static int csi_dump_max = 0;
+  static int csi_active = 0;
+
+  if (csi_dump_max == 0) {
+    csi_dump_max = max_slots;
+    csi_dump_count = 0;
+    csi_active = 1;
+  }
+
+  if (!csi_active) return;
+  if (csi_dump_count >= csi_dump_max) {
+    if (csi_dump_fp) { fclose(csi_dump_fp); csi_dump_fp = NULL; }
+    csi_active = 0;
+    return;
+  }
+
+  if (csi_dump_fp == NULL) {
+    csi_dump_fp = fopen("/tmp/csi_rs_channel.bin", "wb");
+    if (!csi_dump_fp) return;
+
+    struct __attribute__((packed)) {
+      uint32_t magic;
+      uint16_t version;
+      uint8_t  num_rx_ant;
+      uint8_t  num_tx_ant;
+      uint16_t fft_size;
+      uint16_t n_rb;
+      uint32_t subcarrier_spacing;
+      uint32_t num_slots_recorded;
+      uint16_t n_subcarriers;
+      uint16_t subcarrier_offset;
+      uint8_t  n_csi_symbols;
+      uint8_t  reserved[23];
+    } hdr = { .magic = 0x48534D52, .version = 1,
+              .num_rx_ant = (uint8_t)nrx, .num_tx_ant = (uint8_t)ntx,
+              .fft_size = (uint16_t)fft_size, .n_rb = (uint16_t)n_rb,
+              .subcarrier_spacing = (uint32_t)subcarrier_spacing,
+              .num_slots_recorded = 0,
+              .n_subcarriers = (uint16_t)fft_size,
+              .subcarrier_offset = 0,
+              .n_csi_symbols = 1 };
+    fwrite(&hdr, sizeof(hdr), 1, csi_dump_fp);
+  }
+
+  if (!csi_dump_fp) return;
+
+  uint32_t slot_num = csi_dump_count;
+  fwrite(&slot_num, sizeof(slot_num), 1, csi_dump_fp);
+
+  for (int ra = 0; ra < nrx; ra++)
+    for (int ta = 0; ta < ntx; ta++) {
+      const c16_t *h_ptr = h_data + (size_t)(ra * ntx + ta) * (size_t)fft_size;
+      fwrite(h_ptr, sizeof(c16_t), fft_size, csi_dump_fp);
+    }
+
+  csi_dump_count++;
+
+  long saved_pos = ftell(csi_dump_fp);
+  fseek(csi_dump_fp, 16, SEEK_SET);
+  uint32_t sc = (uint32_t)csi_dump_count;
+  fwrite(&sc, sizeof(sc), 1, csi_dump_fp);
+  fseek(csi_dump_fp, saved_pos, SEEK_SET);
 }
 
 static int nr_csi_rs_channel_estimation(
@@ -955,6 +1080,17 @@ void nr_ue_csi_rs_procedures(PHY_VARS_NR_UE *ue,
                                 &log2_re,
                                 &log2_maxh,
                                 &noise_power);
+  }
+
+  /* Dump CSI-RS channel if --record-csi-ch is enabled */
+  if (get_nrUE_params()->record_csi_ch) {
+    dump_csi_rs_channel((const c16_t *)csi_rs_estimated_channel_freq,
+                        frame_parms->nb_antennas_rx,
+                        mapping_parms.ports,
+                        frame_parms->ofdm_symbol_size,
+                        frame_parms->N_RB_DL,
+                        frame_parms->subcarrier_spacing,
+                        get_nrUE_params()->record_csi_ch);
   }
 
   uint8_t rank_indicator = 0;
