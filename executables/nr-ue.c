@@ -12,8 +12,9 @@
 #include "RRC/NR_UE/rrc_proto.h"
 #include "RRC/NR_UE/L2_interface_ue.h"
 #include "SCHED_NR_UE/defs.h"
-#include "PHY/NR_UE_TRANSPORT/nr_transport_proto_ue.h"
-#include "executables/softmodem-common.h"
+ #include "PHY/NR_UE_TRANSPORT/nr_transport_proto_ue.h"
+ #include "PHY/NR_UE_TRANSPORT/ue_shm.h"
+ #include "executables/softmodem-common.h"
 #include "radio/COMMON/common_lib.h"
 #include "LAYER2/nr_pdcp/nr_pdcp_oai_api.h"
 #include "LAYER2/nr_rlc/nr_rlc_oai_api.h"
@@ -162,10 +163,12 @@ void init_nr_ue_vars(PHY_VARS_NR_UE *ue, uint8_t UE_id)
   // initialize all signal buffers
   init_nr_ue_signal(ue, nb_connected_gNB);
 
-  // intialize transport
-  init_nr_ue_transport(ue);
+ // intialize transport
+ init_nr_ue_transport(ue);
+  // initialise shared memory for external monitor
+  ue_shm_init();
 
-  ue->ta_frame = -1;
+ ue->ta_frame = -1;
   ue->ta_slot = -1;
 }
 

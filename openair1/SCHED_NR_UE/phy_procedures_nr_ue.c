@@ -19,6 +19,7 @@
 #include "PHY/NR_REFSIG/ptrs_nr.h"
 #include "PHY/NR_UE_TRANSPORT/nr_transport_ue.h"
 #include "PHY/NR_UE_TRANSPORT/nr_transport_proto_ue.h"
+#include "PHY/NR_UE_TRANSPORT/ue_shm.h"
 #include "SCHED_NR_UE/phy_sch_processing_time.h"
 #include "PHY/NR_UE_ESTIMATION/nr_estimation.h"
 #include "executables/softmodem-common.h"
@@ -1217,7 +1218,10 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
 
   int16_t *llr[2];
   fapi_nr_dl_config_dlsch_pdu_rel15_t *dlsch_config = &phy_data->dlsch_config;
-  for (int c = 0; c < phy_data->n_dlsch_codewords; c++) {
+  meas_dl_shm_t meas_tmp;
+  memset(&meas_tmp, 0, sizeof(meas_tmp));
+  bool meas_active = false;
+ for (int c = 0; c < phy_data->n_dlsch_codewords; c++) {
     NR_UE_DLSCH_t *dlsch = &phy_data->dlsch[c];
     if (!dlsch->active)
       continue;
@@ -1279,7 +1283,7 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
 
     if (ret_pdsch >= 0) {
       nr_ue_dlsch_procedures(ue, proc, dlsch, c, G, &freq_alloc, dlsch_config, llr[c]);
-    } else {
+   } else {
       LOG_E(NR_PHY, "Demodulation impossible, internal error\n");
       if (dlsch_config->k1_feedback) {
         const int ack_nack_slot_and_frame =
@@ -1288,6 +1292,17 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
       }
       LOG_W(NR_PHY, "nr_ue_pdsch_procedures failed in slot %d\n", proc->nr_slot_rx);
     }
+    /* Record scheduled PDSCH parameters even if demodulation/decoding failed. */
+    meas_tmp.mcs = dlsch->cw_info.mcs;
+    meas_tmp.qam_mod_order = dlsch->cw_info.qamModOrder;
+    meas_tmp.tbs = dlsch->cw_info.TBS;
+    meas_tmp.num_layers = dlsch->cw_info.Nl;
+    meas_tmp.rv = dlsch->cw_info.rv;
+    meas_tmp.new_data_indicator = dlsch->cw_info.new_data_indicator;
+    meas_tmp.target_code_rate = dlsch->cw_info.targetCodeRate;
+    meas_tmp.num_rbs = dlsch_config->number_rbs;
+    meas_tmp.num_symbols = dlsch_config->number_symbols;
+    meas_active = true;
 
     stop_meas_nr_ue_phy(ue, DLSCH_PROCEDURES_STATS);
     if (cpumeas(CPUMEAS_GETSTATE)) {
@@ -1321,8 +1336,28 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
           ue->total_TBS_last[gNB_id],(float) ue->bitrate[gNB_id]/1000.0);
   }
 
-  LOG_D(PHY," ****** end RX-Chain  for AbsSubframe %d.%d ******  \n", frame_rx%1024, nr_slot_rx);
-  UEscopeCopy(ue, commonRxdataF, rxdataF, sizeof(int32_t), ue->frame_parms.nb_antennas_rx, rxdataF_sz, 0);
+ LOG_D(PHY," ****** end RX-Chain  for AbsSubframe %d.%d ******  \n", frame_rx%1024, nr_slot_rx);
+  if (meas_active) {
+    /* Write DL measurements to shared memory only when PDSCH was scheduled.
+       This prevents idle slots from overwriting the last valid snapshot. */
+    meas_tmp.frame = frame_rx;
+    meas_tmp.slot = nr_slot_rx;
+    meas_tmp.bitrate_bps = ue->bitrate[gNB_id];
+    meas_tmp.dlsch_received = ue->dlsch_received[gNB_id];
+    meas_tmp.dlsch_errors = ue->dlsch_errors[gNB_id];
+    meas_tmp.dlsch_fer = ue->dlsch_fer[gNB_id];
+    const int ssb_idx = ue->frame_parms.ssb_index;
+    const int ssb_rsrp = ue->measurements.ssb_rsrp_dBm[ssb_idx];
+    meas_tmp.rsrp_dBm = (ssb_rsrp > -190) ? ssb_rsrp : 0;
+    meas_tmp.rssi_dBm = ue->measurements.rx_rssi_dBm[gNB_id];
+    meas_tmp.wideband_sinr_dB = (int16_t)ue->measurements.wideband_cqi_tot[gNB_id];
+    meas_tmp.n_rb_dl = ue->frame_parms.N_RB_DL;
+    meas_tmp.subcarrier_spacing = ue->frame_parms.subcarrier_spacing;
+    meas_tmp.freq_offset = ue->common_vars.freq_offset;
+    meas_tmp.nb_antennas_rx = ue->frame_parms.nb_antennas_rx;
+    ue_shm_write_meas_dl(&meas_tmp);
+  }
+ UEscopeCopy(ue, commonRxdataF, rxdataF, sizeof(int32_t), ue->frame_parms.nb_antennas_rx, rxdataF_sz, 0);
 }
 
 

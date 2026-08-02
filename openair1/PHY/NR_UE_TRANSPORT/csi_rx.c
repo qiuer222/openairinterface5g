@@ -20,6 +20,7 @@
 #include "executables/nr-uesoftmodem.h"
 #include "nr_transport_proto_ue.h"
 #include "PHY/NR_REFSIG/nr_refsig.h"
+#include "ue_shm.h"
 #include "common/utils/nr/nr_common.h"
 #include "PHY/NR_UE_ESTIMATION/filt16a_32.h"
 
@@ -1080,9 +1081,17 @@ void nr_ue_csi_rs_procedures(PHY_VARS_NR_UE *ue,
                                 &log2_re,
                                 &log2_maxh,
                                 &noise_power);
-  }
+   }
+  /* Write CSI-RS frequency-domain channel estimate to shared memory */
+  ue_shm_write_csi_rs(proc->frame_rx, proc->nr_slot_rx,
+                      frame_parms->nb_antennas_rx,
+                      mapping_parms.ports,
+                      frame_parms->ofdm_symbol_size,
+                      frame_parms->N_RB_DL,
+                      frame_parms->subcarrier_spacing,
+                      (const void *)csi_rs_estimated_channel_freq);
 
-  /* Dump CSI-RS channel if --record-csi-ch is enabled */
+ /* Dump CSI-RS channel if --record-csi-ch is enabled */
   if (get_nrUE_params()->record_csi_ch) {
     dump_csi_rs_channel((const c16_t *)csi_rs_estimated_channel_freq,
                         frame_parms->nb_antennas_rx,

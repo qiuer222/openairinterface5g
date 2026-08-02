@@ -34,3 +34,9 @@ nfapi_nr_interface_scf
 *.log
 *.out
 CMakeUserPresets.json
+*.venv
+
+# gui record file
+gui/record
+gui/channel_record
+
