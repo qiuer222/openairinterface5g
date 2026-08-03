@@ -1,0 +1,38 @@
+OAI CSI channel scaling report
+==============================
+
+Recording path:
+- csi_reader.py reads c16_t pairs from /dev/shm/csi_rs_channel and converts them to complex128.
+- OAI writes csi_rs_estimated_channel_freq directly to shared memory after CSI-RS channel estimation.
+- The values therefore retain OAI fixed-point / FFT / RF-gain scaling rather than being physical channel coefficients.
+
+Source references:
+- openair1/PHY/NR_UE_TRANSPORT/csi_rx.c:1086-1092: writes csi_rs_estimated_channel_freq to ue_shm_write_csi_rs
+- openair1/PHY/NR_UE_TRANSPORT/csi_rx.c:430-441: LS estimate uses c16MulConjShift(tx,rx,csi_rs_generated_signal_bits)
+- openair1/PHY/NR_UE_TRANSPORT/csi_rx.c:477-497: interpolation filter applied before shm export
+- openair1/PHY/NR_UE_TRANSPORT/csi_rx.c:226-228: RSRP converts SQ15 FFT-domain power to dBm
+- openair1/PHY/MODULATION/slot_fep_nr.c:27-31: rxdataF is produced by dft() without 1/N normalization
+- common/utils/nr/nr_common.h:79-83: SQ15 squared-norm compensation = 90.309 dB
+- openair1/PHY/impl_defs_top.h:196-202: AMP_SHIFT=9, AMP=512 for the generated CSI-RS signal
+- openair1/PHY/NR_REFSIG/nr_gen_mod_table.c:23-28: QPSK modulation table amplitude is 32768
+- openair1/PHY/TOOLS/tools_defs.h:176-182: c16MulConjShift arithmetic
+
+Observed raw channel power (dB over unit fixed-point power):
+  mean=57.355
+  std=0.000
+  min=57.355
+  max=57.355
+
+RSRP-calibrated effective gain (dB):
+  mean=7.933
+  std=0.000
+
+Normalization used for capacity metrics:
+- mean squared norm of valid subcarriers is scaled to 10^(SNR/10).
+- this removes the unknown RX gain/AGC term while preserving channel shape.
+- RSRP remains an independent predictor in the correlation analysis.
+
+RSRP consistency:
+- RSRP unique values: 1
+- raw channel power std: 0.000 dB
+- Pearson(raw channel power dB, RSRP dBm) is undefined because RSRP is constant in this record.

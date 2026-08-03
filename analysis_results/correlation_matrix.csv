@@ -1,0 +1,5 @@
+metric,pearson_correlation,spearman_correlation,linear_r2,linear_rmse,linear_mae
+rsrp_dBm,,,,,
+average_svd_capacity,,,,,
+best_svd_capacity,,,,,
+best_zf_capacity,,,,,
