@@ -22,6 +22,7 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QMainWindow,
     QPushButton,
@@ -79,6 +80,10 @@ class MainWindow(QMainWindow):
         self.iperf.process_finished.connect(self._on_iperf_finished)
         self.iperf.process_error.connect(self._on_iperf_error)
 
+        self._log_path = self._resolve_log_path(
+            config.get("log_file", DEFAULT_CONFIG["log_file"])
+        )
+        self._log_state: Optional[tuple[int, int]] = None
         self._iperf_bps: float = 0.0
         self._last_meas: Dict = {}
         self._last_csi: Dict = {}
@@ -189,7 +194,7 @@ class MainWindow(QMainWindow):
             "bs_ip": self.bs_ip_edit.text().strip(),
             "port": self.port_spin.value(),
             "duration": self.duration_spin.value(),
-            "log_file": self.config.get("log_file", "gui/iperf.log"),
+            "log_file": self._log_path,
         }
 
     def _refresh(self) -> None:
@@ -210,9 +215,11 @@ class MainWindow(QMainWindow):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         if csi is not None:
             self._last_csi = csi
-            self._save_channel(csi.get("channel"), stamp)
 
-        self._write_csv(stamp)
+        log_changed = self._iperf_log_changed()
+        if log_changed:
+            self._save_channel(self._last_csi.get("channel"), stamp)
+            self._write_csv(stamp)
 
         t = time.monotonic() - self._t0
         values: Dict[str, float] = {"throughput": self._iperf_bps / 1e6}
@@ -271,7 +278,48 @@ class MainWindow(QMainWindow):
         self._close_csv()
         self.meas_reader.close()
         self.csi_reader.close()
+        if os.path.exists(self._log_path):
+            answer = QMessageBox.question(
+                self,
+                "Clear iperf log",
+                f"Delete {self._log_path}?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer == QMessageBox.Yes:
+                try:
+                    os.remove(self._log_path)
+                except OSError as exc:
+                    self.status_label.setText(f"could not delete iperf log: {exc}")
         super().closeEvent(event)
+
+    @staticmethod
+    def _resolve_log_path(path: str) -> str:
+        if not path:
+            return os.path.join(GUI_DIR, "iperf.log")
+        if os.path.isabs(path):
+            return path
+        # The existing config path is repo-root relative, e.g. "gui/iperf.log".
+        return os.path.abspath(os.path.join(os.path.dirname(GUI_DIR), path))
+
+    def _iperf_log_changed(self) -> bool:
+        try:
+            st = os.stat(self._log_path)
+        except FileNotFoundError:
+            self._log_state = None
+            return False
+        state = (st.st_size, st.st_mtime_ns)
+        if self._log_state is None or state != self._log_state:
+            self._log_state = state
+            return True
+        return False
+
+    def _reset_log_state(self) -> None:
+        try:
+            st = os.stat(self._log_path)
+            self._log_state = (st.st_size, st.st_mtime_ns)
+        except FileNotFoundError:
+            self._log_state = None
 
     # ── per-test CSV logging ─────────────────────────────────────────
 
@@ -286,6 +334,7 @@ class MainWindow(QMainWindow):
         os.makedirs(self._channel_dir, exist_ok=True)
         self._csv_fd = open(self._csv_path, "w", newline="", encoding="utf-8")
         self._csv_writer = csv.writer(self._csv_fd)
+        self._reset_log_state()
         self._csv_writer.writerow([
             "timestamp", "throughput_mbps",
             "sv0", "sv1", "sv2", "sv3", "sv4", "sv5", "sv6", "sv7",
@@ -296,6 +345,7 @@ class MainWindow(QMainWindow):
             "rsrp_dBm", "rssi_dBm", "sinr_dB", "freq_offset_hz",
             "n_rb_dl", "scs", "nb_antennas_rx",
         ])
+        self._csv_fd.flush()
         self.status_label.setText(f"logging to {self._csv_path}")
 
     def _write_csv(self, stamp: Optional[str] = None) -> None:
@@ -335,6 +385,7 @@ class MainWindow(QMainWindow):
             self._last_meas.get("scs", 0),
             self._last_meas.get("nb_antennas_rx", 0),
         ])
+        self._csv_fd.flush()
 
     def _save_channel(self, channel, stamp: Optional[str] = None) -> None:
         if channel is None or self._channel_dir is None:
