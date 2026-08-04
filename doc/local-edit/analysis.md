@@ -35,6 +35,9 @@ only `--csi` is provided, the script derives the CSV path by appending `.csv`.
 Without either option, the script selects the latest complete GUI record under
 `gui/record/`.
 
+The newer `gui/analysis/channel_analysis.py` pipeline writes its output files to
+`gui/channel_analysis_results/` by default.
+
 ## 3. OAI Channel Scaling and Normalization
 
 The channel saved by the GUI is not a physical channel coefficient. It is the

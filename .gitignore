@@ -38,6 +38,7 @@ CMakeUserPresets.json
 # gui record file
 gui/record
 gui/channel_record
+gui/*_results
 
 # Python
 *.venv
