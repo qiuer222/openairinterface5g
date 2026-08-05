@@ -148,11 +148,12 @@ stdbuf -oL -eL iperf3 ...
 when `stdbuf` is available. This forces line-by-line output and keeps the
 throughput plot updating while the test is still running.
 
-The parser accepts interval lines and summary lines, e.g.:
+The parser accepts 1-second interval lines and ignores the final total-time
+summary lines, e.g.:
 
 ```text
 [  5]   6.00-7.00   sec  19.2 MBytes   161 Mbits/sec
-[  5]   0.00-30.00  sec   537 MBytes   150 Mbits/sec  sender
+[  5]   0.00-30.00  sec   537 MBytes   150 Mbits/sec  sender  # ignored
 ```
 
 ### 3.3 CSI channel-quality calculation
