@@ -173,7 +173,9 @@ Two modes (selected by `max_slots`): same semantics as SRS recording above.
 
 On the **first call**, it checks `getenv("CHANNEL_FILE")`:
 - If set → try to load the file. Success → SRS replay. Failure → log warning, call `rxAddInput()`.
-- If not set → call `rxAddInput()` (normal TDL model).
+- If not set → log a message and call `rxAddInput()` (normal TDL model).
+
+The DFT/IDFT implementation is resolved from OAI's exported `dft` / `idft` function-pointer variables via `dlsym()`, then dereferenced to the real implementation loaded by `load_dftslib()`.
 
 ### Processing Per RX Antenna
 
@@ -242,18 +244,39 @@ sudo ./nr-uesoftmodem -O ue.conf --rfsim --record-csi-ch 20
 
 ### 3. Replay in RFSim
 
-The replay engine reads the `.bin` file at startup via `CHANNEL_FILE` and cycles through the recorded slots. Works with both single-slot (1 slot cycles on itself) and burst (up to 100 slots) recordings.
+The replay engine reads the `.bin` file at startup via the `CHANNEL_FILE` environment variable and cycles through the recorded slots. Works with both single-slot (1 slot cycles on itself) and burst (up to 100 slots) recordings.
+
+> **Note:** `sudo` strips environment variables by default. Use `sudo -E` after exporting the variable, or use `sudo env CHANNEL_FILE=...` so the replay process actually sees it.
 
 ```bash
-CHANNEL_FILE=/tmp/srs_channel.bin \
-  sudo ./nr-softmodem -O gnb.conf --rfsim
+# Export first, then use sudo -E
+export CHANNEL_FILE=/tmp/srs_channel.bin
+sudo -E ./nr-softmodem -O gnb.conf --rfsim
+
+# Or pass through sudo explicitly
+sudo env CHANNEL_FILE=/tmp/srs_channel.bin \
+  ./nr-softmodem -O gnb.conf --rfsim
 
 # Or replay CSI-RS recording
-CHANNEL_FILE=/tmp/csi_rs_channel.bin \
-  sudo ./nr-softmodem -O gnb.conf --rfsim
+sudo env CHANNEL_FILE=/tmp/csi_rs_channel.bin \
+  ./nr-softmodem -O gnb.conf --rfsim
 
 # UE connects normally
 sudo ./nr-uesoftmodem -O ue.conf --rfsim
+```
+
+Expected replay log when loading succeeds:
+
+```
+[HW] [rfsim] Loading channel file: /tmp/srs_channel.bin
+[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096)
+```
+
+If the variable is missing or the file fails to load, the log clearly shows the fallback:
+
+```
+[HW] [rfsim] CHANNEL_FILE not set, using normal channel model
+[HW] Failed to load channel file: /tmp/missing.bin
 ```
 
 ### 4. Build
@@ -280,8 +303,8 @@ sudo ./nr-uesoftmodem -r 106 --numerology 1 --band 78 -C 3319680000 --ue-nb-ant-
 | `--record-srs-ch 20` | Burst SRS record (20 slots then stop) to `/tmp/srs_channel.bin` |
 | `--record-csi-ch 1` | Single-slot CSI-RS record (rewrite each time) to `/tmp/csi_rs_channel.bin` |
 | `--record-csi-ch 20` | Burst CSI-RS record (20 slots then stop) to `/tmp/csi_rs_channel.bin` |
-| `CHANNEL_FILE=/path ...` | Replay recorded channel (SRS or CSI-RS) |
-| `unset CHANNEL_FILE ...` | Normal TDL channel model (AWGN/EPA/EVA/ETU) |
+| `CHANNEL_FILE=/path` with `sudo -E` (or `sudo env`) | Replay recorded channel (SRS or CSI-RS) |
+| `unset CHANNEL_FILE` | Normal TDL channel model (AWGN/EPA/EVA/ETU) |
 
 ---
 

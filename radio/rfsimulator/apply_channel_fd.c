@@ -29,9 +29,11 @@ static idftfunc_t p_idft = NULL;
 
 static int resolve_dft(void) {
   if (!p_dft) {
-    p_dft  = (dftfunc_t) dlsym(RTLD_DEFAULT, "dft");
-    p_idft = (idftfunc_t) dlsym(RTLD_DEFAULT, "idft");
-    if (!p_dft || !p_idft) return -1;
+    dftfunc_t *dft_ptr  = (dftfunc_t *) dlsym(RTLD_DEFAULT, "dft");
+    idftfunc_t *idft_ptr = (idftfunc_t *) dlsym(RTLD_DEFAULT, "idft");
+    if (!dft_ptr || !idft_ptr || !*dft_ptr || !*idft_ptr) return -1;
+    p_dft  = *dft_ptr;
+    p_idft = *idft_ptr;
   }
   return 0;
 }
@@ -58,6 +60,7 @@ int srs_replay_loaded = 0;
 // ---- Replay state ----
 static struct {
   int    loaded;
+  int    tried_load;  /* avoid retrying load on every RX antenna/buffer */
   int    num_rx;
   int    num_tx;
   int    fft_size;
@@ -100,6 +103,12 @@ int rfsim_load_srs_file(const char *path) {
     fseek(fp, skip_count * slot_total_bytes, SEEK_CUR);
   }
 
+  if (load_count <= 0) {
+    LOG_W(HW, "[rfsim] Channel file %s has no recorded slots\n", path);
+    fclose(fp);
+    return -1;
+  }
+
   srs_replay.h_data = calloc(load_count * h_per_slot, sizeof(c16_t));
   if (!srs_replay.h_data) { fclose(fp); return -1; }
 
@@ -117,14 +126,17 @@ int rfsim_load_srs_file(const char *path) {
     LOG_I(HW, "[rfsim] Skipped %d old slots, loaded last %d of %d recorded\n", skip_count, load_count, total_slots);
   }
 
-  srs_replay.loaded = 1;
-  srs_replay_loaded = 1;
-
-  // Resolve DFT function pointers
+  // Resolve DFT function pointers first: dft/idft are function-pointer variables,
+  // so dlsym gives their address and the actual pointer must be dereferenced.
   if (resolve_dft() != 0) {
     fprintf(stderr, "[rfsim] ERROR: cannot resolve DFT function pointers\n");
+    free(srs_replay.h_data);
+    srs_replay.h_data = NULL;
     return -1;
   }
+
+  srs_replay.loaded = 1;
+  srs_replay_loaded = 1;
 
   LOG_I(HW, "[rfsim] Loaded SRS channel file: %s (%d slots, %dx%d, fft=%d)\n",
         path, srs_replay.num_slots, srs_replay.num_rx, srs_replay.num_tx, srs_replay.fft_size);
@@ -138,17 +150,22 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
 
   // First call: if CHANNEL_FILE env var is set, try to load it.
   // If file loads → SRS replay. If not set or load fails → fall back to rxAddInput.
-  if (!srs_replay.loaded) {
+  if (!srs_replay.loaded && !srs_replay.tried_load) {
+    srs_replay.tried_load = 1;
     const char *srs_path = getenv("CHANNEL_FILE");
     if (srs_path) {
+      LOG_I(HW, "[rfsim] Loading channel file: %s\n", srs_path);
       if (rfsim_load_srs_file(srs_path) != 0) {
-        LOG_W(HW, "Failed to load SRS channel file: %s\n", srs_path);
+        LOG_W(HW, "Failed to load channel file: %s\n", srs_path);
       }
+    } else {
+      LOG_I(HW, "[rfsim] CHANNEL_FILE not set, using normal channel model\n");
     }
-    if (!srs_replay.loaded) {
-      rxAddInput(input_sig, after_channel_sig, rxAnt, channelDesc, nbSamples);
-      return;
-    }
+  }
+
+  if (!srs_replay.loaded) {
+    rxAddInput(input_sig, after_channel_sig, rxAnt, channelDesc, nbSamples);
+    return;
   }
 
   const int fft_size = srs_replay.fft_size;
@@ -168,6 +185,11 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
   idft_size_idx_t ids = get_idft(fft_size);
 
   if (ds == DFT_SIZE_IDXTABLESIZE || ids == IDFT_SIZE_IDXTABLESIZE) {
+    memset(after_channel_sig, 0, nbSamples * sizeof(cf_t));
+    return;
+  }
+
+  if (srs_replay.num_slots <= 0) {
     memset(after_channel_sig, 0, nbSamples * sizeof(cf_t));
     return;
   }
