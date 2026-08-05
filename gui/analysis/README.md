@@ -42,3 +42,8 @@ Outputs:
 - `analysis_summary.txt`
 - `analysis_summary.md`
 - `figures/channel_analysis_<csv_stem>.png`, where `<csv_stem>` is the source CSV filename without `.csv`
+- `figures/channel_analysis_position_means_<csv_stem>.png`, with one point per position
+
+The summary reports per-position metric means and correlations between each
+position's top-50% throughput mean and the position's mean channel/radio
+metric.

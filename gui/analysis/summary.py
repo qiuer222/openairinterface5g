@@ -49,6 +49,14 @@ def _fmt(value) -> str:
     return f"{number:.3f}"
 
 
+def _top_half_mean(values: pd.Series) -> float:
+    finite = pd.to_numeric(values, errors="coerce").dropna().sort_values(ascending=False)
+    if finite.empty:
+        return float("nan")
+    top_count = max(1, int(np.ceil(len(finite) / 2.0)))
+    return float(finite.iloc[:top_count].mean())
+
+
 def _markdown_table(df: pd.DataFrame, index_name: str = "metric") -> str:
     lines = [
         "| " + " | ".join([index_name] + [str(col) for col in df.columns]) + " |",
@@ -107,7 +115,7 @@ def _metric_columns() -> List[str]:
 
 
 def _correlation_selection_table(samples: pd.DataFrame, metrics: List[str]) -> pd.DataFrame:
-    position_throughput_means = samples.groupby("PositionID")["ThroughputMbps"].mean()
+    position_throughput_means = samples.groupby("PositionID")["ThroughputMbps"].apply(_top_half_mean)
     optimal_throughput = float(position_throughput_means.max())
     optimal_candidates = position_throughput_means[
         np.isclose(position_throughput_means, optimal_throughput, rtol=1e-9, atol=1e-12)
@@ -124,7 +132,9 @@ def _correlation_selection_table(samples: pd.DataFrame, metrics: List[str]) -> p
             ].index
             selected_position = int(min(candidates))
             selected_actual_throughput = float(
-                samples.loc[samples["PositionID"] == selected_position, "ThroughputMbps"].mean()
+                _top_half_mean(
+                    samples.loc[samples["PositionID"] == selected_position, "ThroughputMbps"]
+                )
             )
         else:
             selected_position = None
@@ -146,6 +156,34 @@ def _correlation_selection_table(samples: pd.DataFrame, metrics: List[str]) -> p
     return pd.DataFrame(rows)
 
 
+def position_correlation_table(samples: pd.DataFrame, metrics: List[str]) -> pd.DataFrame:
+    throughput_means = samples.groupby("PositionID")["ThroughputMbps"].apply(_top_half_mean)
+    rows: List[Dict] = []
+
+    for metric in metrics:
+        if metric == "ThroughputMbps" or metric not in samples.columns:
+            continue
+        metric_means = samples.groupby("PositionID")[metric].mean()
+        paired = pd.DataFrame({
+            "top50_throughput_mbps": throughput_means,
+            "metric_mean": metric_means,
+        }).dropna()
+        if len(paired) >= 2:
+            pearson = _safe_pearson(paired["metric_mean"], paired["top50_throughput_mbps"])
+            spearman = _safe_spearman(paired["metric_mean"], paired["top50_throughput_mbps"])
+        else:
+            pearson = float("nan")
+            spearman = float("nan")
+        rows.append({
+            "metric": metric,
+            "pearson_position_correlation": pearson,
+            "spearman_position_correlation": spearman,
+            "positions_used": len(paired),
+        })
+
+    return pd.DataFrame(rows)
+
+
 def write_markdown_summary(
     analysis: pd.DataFrame,
     csv_path: str,
@@ -153,6 +191,7 @@ def write_markdown_summary(
     output_path: str,
     validation: Optional[Dict] = None,
     figure_path: Optional[str] = None,
+    position_figure_path: Optional[str] = None,
 ) -> str:
     samples = _build_sample_metrics(analysis)
     metrics = [col for col in _metric_columns() if col in samples.columns]
@@ -163,14 +202,19 @@ def write_markdown_summary(
         row = {"metric": metric}
         for pos in positions:
             values = samples.loc[samples["PositionID"] == pos, metric]
-            finite = values.dropna()
-            row[f"P{pos}"] = float(finite.mean()) if not finite.empty else float("nan")
+            if metric == "ThroughputMbps":
+                row[f"P{pos}"] = _top_half_mean(values)
+            else:
+                finite = values.dropna()
+                row[f"P{pos}"] = float(finite.mean()) if not finite.empty else float("nan")
         position_means_rows.append(row)
     position_means = pd.DataFrame(position_means_rows)
 
     corr_selection = _correlation_selection_table(samples, metrics)
+    position_corr = position_correlation_table(samples, metrics)
     position_means = position_means.set_index("metric")
     corr_selection = corr_selection.set_index("metric")
+    position_corr = position_corr.set_index("metric")
     non_throughput = corr_selection[corr_selection.index != "ThroughputMbps"].copy()
     non_throughput = non_throughput.dropna(subset=["throughput_gap_mbps"])
     if non_throughput.empty:
@@ -211,14 +255,28 @@ def write_markdown_summary(
     if figure_path:
         lines.append(f"- Figure: `{figure_path}`")
     lines.extend(["", "## Per-position Metric Means", ""])
+    lines.append(
+        "For throughput, each position uses the mean of the highest-throughput "
+        "top 50% of samples. Other metrics use all finite samples."
+    )
+    lines.append("")
     lines.append(_markdown_table(position_means))
+    lines.extend(["", "## Per-position Throughput vs Metric Correlation", ""])
+    lines.append(
+        "Each row compares the per-position top-50% throughput mean with the "
+        "per-position mean of the named metric."
+    )
+    lines.append("")
+    lines.append(_markdown_table(position_corr))
+    if position_figure_path:
+        lines.extend(["", f"- Position figure: `{position_figure_path}`"])
     lines.extend(["", "## Throughput Correlations and Position Selection", ""])
     lines.append(
         "The correlation columns show Pearson and Spearman correlation between each "
         "channel metric and measured throughput. The selection procedure then chooses "
         "the position with the highest mean metric value for each predictor. "
-        "`throughput_gap_mbps` is the difference between the actual mean throughput at "
-        "the selected position and the best actual throughput position."
+        "`throughput_gap_mbps` is the difference between the top-50% throughput mean "
+        "at the selected position and the best top-50% throughput position."
     )
     lines.append("")
     lines.append(_markdown_table(corr_selection))

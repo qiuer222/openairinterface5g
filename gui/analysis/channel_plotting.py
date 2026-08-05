@@ -18,6 +18,14 @@ def _finite_max(values: np.ndarray) -> float:
     return float(np.max(finite)) if len(finite) else float("nan")
 
 
+def _top_half_mean(values: pd.Series) -> float:
+    finite = pd.to_numeric(values, errors="coerce").dropna().sort_values(ascending=False)
+    if finite.empty:
+        return float("nan")
+    top_count = max(1, int(np.ceil(len(finite) / 2.0)))
+    return float(finite.iloc[:top_count].mean())
+
+
 def _build_sample_metrics(
     analysis: pd.DataFrame,
     cleaned: Optional[pd.DataFrame],
@@ -193,6 +201,73 @@ def plot_channel_analysis(
     fig.tight_layout(rect=(0, 0, 1, 0.985))
 
     output_path = output_path or os.path.join(os.path.dirname(analysis_csv), "figures", "channel_analysis_metrics.png")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, dpi=150)
+    plt.close(fig)
+    return output_path
+
+
+def plot_position_metrics(
+    analysis_csv: str,
+    cleaned_csv: Optional[str] = None,
+    samples_per_position: int = 30,
+    output_path: Optional[str] = None,
+) -> str:
+    """Create stacked per-position mean plots with one point per position."""
+    analysis = pd.read_csv(analysis_csv)
+    cleaned = None
+    if cleaned_csv and os.path.exists(cleaned_csv):
+        cleaned = pd.read_csv(cleaned_csv)
+
+    samples = _build_sample_metrics(analysis, cleaned, samples_per_position)
+    if samples.empty:
+        raise ValueError("no samples to plot")
+
+    positions = sorted(int(v) for v in samples["PositionID"].unique())
+    x = np.asarray(positions, dtype=float)
+
+    def _position_mean(column: str) -> np.ndarray:
+        if column == "throughput_mbps":
+            values = samples.groupby("PositionID")[column].apply(_top_half_mean)
+        else:
+            values = samples.groupby("PositionID")[column].mean()
+        return values.reindex(positions).to_numpy(dtype=float)
+
+    series_specs: List[Tuple[str, List[Tuple[str, np.ndarray, str]]]] = [
+        ("Throughput (top-50% mean)", [("throughput_mbps", _position_mean("throughput_mbps"), "#1f77b4")]),
+        (
+            "layers / argmax_k",
+            [
+                ("layers", _position_mean("layers"), "#ff7f0e"),
+                ("argmax K (ZF+MMSE)", _position_mean("argmax_k_zf_mmse"), "#2ca02c"),
+            ],
+        ),
+        ("RSRP", [("rsrp_dBm", _position_mean("rsrp_dBm"), "#d62728")]),
+        (
+            "max sum_k log2(1+SINR_stream_k)",
+            [("max ZF+MMSE capacity", _position_mean("max_zf_mmse_capacity"), "#9467bd")],
+        ),
+        (
+            "max CapacitySVD",
+            [("max SVD capacity", _position_mean("max_svd_capacity"), "#17becf")],
+        ),
+    ]
+
+    fig, axes = plt.subplots(len(series_specs), 1, figsize=(12, 18), sharex=True)
+    for ax, (title, series) in zip(axes, series_specs):
+        for label, values, color in series:
+            ax.plot(x, values, marker="o", markersize=6, linestyle="-", linewidth=1.0, color=color, label=label)
+        ax.grid(alpha=0.3)
+        ax.set_ylabel(title)
+        ax.legend(loc="upper right", fontsize=8)
+
+    axes[-1].set_xlabel("Position index")
+    fig.suptitle("OAI CSI + iperf Position Means", fontsize=14)
+    fig.tight_layout(rect=(0, 0, 1, 0.985))
+
+    output_path = output_path or os.path.join(
+        os.path.dirname(analysis_csv), "figures", "channel_analysis_position_means.png"
+    )
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     fig.savefig(output_path, dpi=150)
     plt.close(fig)

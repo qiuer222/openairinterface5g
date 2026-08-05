@@ -15,7 +15,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from gui.analysis.csi_matcher import load_channel_map, match_csi
-from gui.analysis.channel_plotting import plot_channel_analysis
+from gui.analysis.channel_plotting import plot_channel_analysis, plot_position_metrics
 from gui.analysis.data_cleaner import clean_measurements
 from gui.analysis.mimo_analysis import MAX_STREAMS, analyze_channel, effective_snr_db
 from gui.analysis.summary import write_markdown_summary
@@ -217,12 +217,23 @@ def main() -> None:
     validation = _write_validation_report(cleaned, output_dir)
 
     plot_path = None
+    position_plot_path = None
     if not args.no_plots:
         plot_path = plot_channel_analysis(
             analysis_csv=os.path.join(output_dir, "channel_analysis.csv"),
             cleaned_csv=os.path.join(output_dir, "cleaned_measurement.csv"),
             samples_per_position=args.max_samples_per_position,
             output_path=os.path.join(output_dir, "figures", f"channel_analysis_{csv_stem}.png"),
+        )
+        position_plot_path = plot_position_metrics(
+            analysis_csv=os.path.join(output_dir, "channel_analysis.csv"),
+            cleaned_csv=os.path.join(output_dir, "cleaned_measurement.csv"),
+            samples_per_position=args.max_samples_per_position,
+            output_path=os.path.join(
+                output_dir,
+                "figures",
+                f"channel_analysis_position_means_{csv_stem}.png",
+            ),
         )
 
     markdown_summary = write_markdown_summary(
@@ -232,6 +243,7 @@ def main() -> None:
         output_path=os.path.join(output_dir, "analysis_summary.md"),
         validation=validation,
         figure_path=plot_path,
+        position_figure_path=position_plot_path,
     )
 
     summary = [
@@ -247,6 +259,8 @@ def main() -> None:
     ]
     if plot_path:
         summary.append(f"plot: {plot_path}")
+    if position_plot_path:
+        summary.append(f"position plot: {position_plot_path}")
     _write_text(os.path.join(output_dir, "analysis_summary.txt"), summary)
     print("\n".join(summary))
 
