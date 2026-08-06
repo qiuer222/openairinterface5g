@@ -347,6 +347,14 @@ void nrue_ru_start(void)
     AssertFatal(tmp == 0, "Could not load the device %d\n", ru_id);
     int tmp2 = dev0->trx_start_func(dev0);
     AssertFatal(tmp2 == 0, "Could not start the device %d\n", ru_id);
+    for (int i = 0; i < cfg0->rx_num_channels; i++)
+      LOG_I(HW,
+            "UE RU %d G_rx[%d] = %.0f dB (rx_gain %.0f, rx_gain_offset %.0f)\n",
+            ru_id,
+            i,
+            cfg0->rx_gain[i] - cfg0->rx_gain_offset[i],
+            cfg0->rx_gain[i],
+            cfg0->rx_gain_offset[i]);
     if (usrp_tx_thread == 1)
       dev0->trx_write_init(dev0);
   }
@@ -427,7 +435,10 @@ int nrue_ru_adjust_rx_gain(PHY_VARS_NR_UE *UE, int gain_change)
   }
 
   int applied_rxgain = cfg0->rx_gain[0] - cfg0->rx_gain_offset[0];
-  LOG_I(HW, "Rxgain adjusted by %d dB, RX gain: %d dB \n", gain_change, applied_rxgain);
+  LOG_I(HW,
+        "UE G_rx[0] adjusted by %d dB, G_rx: %d dB\n",
+        gain_change,
+        applied_rxgain);
 
   return gain_change;
 }

@@ -822,12 +822,34 @@ int nr_start_if(struct RU_t_s *ru)
     for (int i = 0; i < ru->nb_rx; i++)
       ru->openair0_cfg.rxbase[i] = ru->common.rxdata[i];
   ru->openair0_cfg.rxsize = ru->nr_frame_parms->samples_per_subframe*10;
-  return ru->ifdevice.trx_start_func(&ru->ifdevice);
+  int ret = ru->ifdevice.trx_start_func(&ru->ifdevice);
+  if (ret == 0) {
+    for (int i = 0; i < ru->nb_rx; i++)
+      LOG_I(PHY,
+            "gNB RU %d G_rx[%d] = %.0f dB (rx_gain %.0f, rx_gain_offset %.0f)\n",
+            ru->idx,
+            i,
+            ru->openair0_cfg.rx_gain[i] - ru->openair0_cfg.rx_gain_offset[i],
+            ru->openair0_cfg.rx_gain[i],
+            ru->openair0_cfg.rx_gain_offset[i]);
+  }
+  return ret;
 }
 
 int start_rf(RU_t *ru)
 {
-  return(ru->rfdevice.trx_start_func(&ru->rfdevice));
+  int ret = ru->rfdevice.trx_start_func(&ru->rfdevice);
+  if (ret == 0) {
+    for (int i = 0; i < ru->nb_rx; i++)
+      LOG_I(PHY,
+            "gNB RU %d G_rx[%d] = %.0f dB (rx_gain %.0f, rx_gain_offset %.0f)\n",
+            ru->idx,
+            i,
+            ru->openair0_cfg.rx_gain[i] - ru->openair0_cfg.rx_gain_offset[i],
+            ru->openair0_cfg.rx_gain[i],
+            ru->openair0_cfg.rx_gain_offset[i]);
+  }
+  return ret;
 }
 
 int stop_rf(RU_t *ru)
@@ -1206,4 +1228,3 @@ static void NRRCconfig_RU(configmodule_interface_t *cfg)
   } // j=0..num_rus
   return;
 }
-
