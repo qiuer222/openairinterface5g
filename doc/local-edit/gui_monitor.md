@@ -29,8 +29,8 @@ Python GUI (gui/oai_ue_monitor.py)
   |
   v
 gui/iperf.log
-gui/record/gui_log_<timestamp>.csv
-gui/record/gui_log_<timestamp>/channel_<timestamp>.npy
+gui/record/gui_ue_log_<timestamp>.csv
+gui/record/gui_ue_log_<timestamp>/channel_<timestamp>.npy
 ```
 
 ## 2. C side: data saving from OAI
@@ -131,7 +131,7 @@ to `iperf.log`.
 3. check whether gui/iperf.log changed (size and mtime)
 4. if changed:
      save latest CSI channel as channel_<timestamp>.npy
-     append one row to gui/record/gui_log_<timestamp>.csv
+     append one row to gui/record/gui_ue_log_<timestamp>.csv
 5. update throughput / PDSCH / CSI plots every 500 ms
 ```
 
@@ -179,12 +179,12 @@ Valid subcarriers are averaged. The average singular values are exposed as
 
 All iperf3 stdout is appended in real time.
 
-### 4.2 `gui/record/gui_log_<timestamp>.csv`
+### 4.2 `gui/record/gui_ue_log_<timestamp>.csv`
 
 Created when UL or DL is started. Column layout:
 
 ```text
-timestamp, throughput_mbps,
+timestamp, test_round, throughput_mbps,
 sv0 ... sv7, capacity, rank, condition_number,
 frame, slot, mcs, qm, tbs_bits, layers, nprb, nsymb, rv,
 new_data_indicator, target_code_rate, bitrate_bps,
@@ -200,7 +200,7 @@ n_rb_dl, scs, nb_antennas_rx
 20260802_223124_731830
 ```
 
-### 4.3 `gui/record/gui_log_<timestamp>/channel_<timestamp>.npy`
+### 4.3 `gui/record/gui_ue_log_<timestamp>/channel_<timestamp>.npy`
 
 When `iperf.log` changes, the latest complex channel array used for capacity
 calculation is saved with `numpy.save()` inside the same-name folder as the CSV
@@ -215,7 +215,7 @@ Example load:
 
 ```python
 import numpy as np
-h = np.load("gui/record/gui_log_20260802_220903/channel_20260802_220903_019759.npy")
+h = np.load("gui/record/gui_ue_log_20260802_220903/channel_20260802_220903_019759.npy")
 print(h.shape, h.dtype)
 ```
 

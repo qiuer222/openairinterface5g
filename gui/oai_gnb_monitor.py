@@ -91,6 +91,7 @@ class GnbMainWindow(QMainWindow):
         self._csv_writer = None
         self._csv_path: Optional[str] = None
         self._srs_channel_dir: Optional[str] = None
+        self._test_round = 0
 
         self._build_ui()
 
@@ -371,10 +372,11 @@ class GnbMainWindow(QMainWindow):
 
     def _open_csv(self) -> None:
         self._close_csv()
+        self._test_round += 1
         ts = time.strftime("%Y%m%d_%H%M%S")
         record_dir = os.path.join(GNB_GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)
-        csv_base = f"gnb_log_{ts}"
+        csv_base = f"gui_gnb_log_{ts}"
         self._csv_path = os.path.join(record_dir, f"{csv_base}.csv")
         self._srs_channel_dir = os.path.join(record_dir, csv_base)
         os.makedirs(self._srs_channel_dir, exist_ok=True)
@@ -382,7 +384,7 @@ class GnbMainWindow(QMainWindow):
         self._csv_writer = csv.writer(self._csv_fd)
         self._reset_log_state()
         self._csv_writer.writerow([
-            "timestamp", "throughput_mbps",
+            "timestamp", "test_round", "throughput_mbps",
             "dl_frame", "dl_slot", "dl_rnti", "dl_bler", "dl_sinr",
             "dl_mcs", "dl_nprb", "dl_layers", "dl_qm", "dl_tbs", "dl_cqi", "dl_ri",
             "ul_frame", "ul_slot", "ul_rnti", "ul_bler", "ul_sinr",
@@ -403,6 +405,7 @@ class GnbMainWindow(QMainWindow):
         srs = self._last_srs
         self._csv_writer.writerow([
             stamp,
+            self._test_round,
             self._iperf_bps / 1e6,
             dl.get("frame", 0), dl.get("slot", 0), dl.get("rnti", 0),
             dl.get("bler", 0), dl.get("sinr", 0),

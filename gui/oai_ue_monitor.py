@@ -94,6 +94,7 @@ class MainWindow(QMainWindow):
         self._csv_writer = None
         self._csv_path: Optional[str] = None
         self._channel_dir: Optional[str] = None
+        self._test_round = 0
 
         self._build_ui()
 
@@ -355,10 +356,11 @@ class MainWindow(QMainWindow):
 
     def _open_csv(self) -> None:
         self._close_csv()
+        self._test_round += 1
         ts = time.strftime("%Y%m%d_%H%M%S")
         record_dir = os.path.join(GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)
-        csv_base = f"gui_log_{ts}"
+        csv_base = f"gui_ue_log_{ts}"
         self._csv_path = os.path.join(record_dir, f"{csv_base}.csv")
         self._channel_dir = os.path.join(record_dir, csv_base)
         os.makedirs(self._channel_dir, exist_ok=True)
@@ -366,7 +368,7 @@ class MainWindow(QMainWindow):
         self._csv_writer = csv.writer(self._csv_fd)
         self._reset_log_state()
         self._csv_writer.writerow([
-            "timestamp", "throughput_mbps",
+            "timestamp", "test_round", "throughput_mbps",
             "sv0", "sv1", "sv2", "sv3", "sv4", "sv5", "sv6", "sv7",
             "capacity", "rank", "condition_number",
             "frame", "slot", "mcs", "qm", "tbs_bits", "layers", "nprb",
@@ -390,6 +392,7 @@ class MainWindow(QMainWindow):
         rsrp_per_ant += [0] * (4 - len(rsrp_per_ant))
         self._csv_writer.writerow([
             stamp,
+            self._test_round,
             self._iperf_bps / 1e6,
             *sv,
             self._last_csi.get("capacity", 0.0),

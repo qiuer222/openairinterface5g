@@ -49,6 +49,15 @@ The left panel shows separate DL and UL measurement text boxes plus SRS status.
 The right panel plots throughput, DL measurements, UL measurements, and SRS
 channel quality.
 
+CSV records are written to:
+
+```text
+gui/record/gui_gnb_log_<timestamp>.csv
+gui/record/gui_gnb_log_<timestamp>/srs_<timestamp>.npy
+```
+
+Each CSV row includes `test_round` to identify the iperf test round.
+
 iperf3 pairing:
 
 - gNB UL button: gNB runs a server; the UE side should run the iperf3 client.

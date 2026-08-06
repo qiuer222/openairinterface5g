@@ -34,7 +34,9 @@ from sklearn.linear_model import LinearRegression
 def find_latest_record() -> tuple[str, str]:
     repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     record_dir = os.path.join(repo_root, "gui", "record")
-    csvs = sorted(glob.glob(os.path.join(record_dir, "gui_log_*.csv")))
+    csvs = sorted(glob.glob(os.path.join(record_dir, "gui_ue_log_*.csv")))
+    if not csvs:
+        csvs = sorted(glob.glob(os.path.join(record_dir, "gui_log_*.csv")))
     if not csvs:
         raise FileNotFoundError("no GUI records found under gui/record")
     for csv_path in reversed(csvs):

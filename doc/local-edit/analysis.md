@@ -23,8 +23,8 @@ Run from the repository root:
 
 ```bash
 .venv/bin/python gui/analysis/analyze_correlation.py \
-  --csv gui/record/gui_log_20260802_223124.csv \
-  --csi gui/record/gui_log_20260802_223124 \
+  --csv gui/record/gui_ue_log_20260802_223124.csv \
+  --csi gui/record/gui_ue_log_20260802_223124 \
   --snr 10 \
   --output-dir analysis_results
 ```
