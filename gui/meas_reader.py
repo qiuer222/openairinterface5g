@@ -10,6 +10,7 @@ from typing import Dict, Optional
 
 
 MEAS_DL_SHM = "/dev/shm/meas_dl"
+MEAS_DL_MAX_RX_ANT = 4
 
 
 class MeasDlShm(ctypes.Structure):
@@ -34,6 +35,7 @@ class MeasDlShm(ctypes.Structure):
         ("dlsch_errors",      ctypes.c_uint32),
         ("dlsch_fer",         ctypes.c_uint8),
         ("rsrp_dBm",          ctypes.c_int32),
+        ("rsrp_per_ant_dBm",  ctypes.c_int32 * MEAS_DL_MAX_RX_ANT),
         ("rssi_dBm",          ctypes.c_int16),
         ("wideband_sinr_dB",  ctypes.c_int16),
         ("n_rb_dl",           ctypes.c_uint16),
@@ -88,6 +90,10 @@ class MeasDlReader:
             "slot": m.slot,
             "bler": m.dlsch_fer,
             "rsrp": m.rsrp_dBm,
+            "rsrp_per_ant": [
+                m.rsrp_per_ant_dBm[i]
+                for i in range(min(int(m.nb_antennas_rx), MEAS_DL_MAX_RX_ANT))
+            ],
             "sinr": m.wideband_sinr_dB / 10.0,
             "mcs": m.mcs,
             "nprb": m.num_rbs,

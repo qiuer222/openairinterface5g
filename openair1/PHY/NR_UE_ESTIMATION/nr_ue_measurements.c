@@ -118,7 +118,8 @@ void nr_ue_measurements(PHY_VARS_NR_UE *ue,
 // - SS reference signal received digital power in dB/RE
 uint32_t nr_ue_calculate_ssb_rsrp(const NR_DL_FRAME_PARMS *fp,
                                   const c16_t rxdataF[][fp->ofdm_symbol_size],
-                                  int ssb_start_subcarrier)
+                                  int ssb_start_subcarrier,
+                                  uint32_t *rsrp_per_ant)
 {
   const int k_start = 56;
   const int k_end = 183;
@@ -128,11 +129,17 @@ uint32_t nr_ue_calculate_ssb_rsrp(const NR_DL_FRAME_PARMS *fp,
   int nb_re = 0;
   for (int aarx = 0; aarx < fp->nb_antennas_rx; aarx++) {
     const c16_t *rxF_sss = rxdataF[aarx];
+    uint32_t ant_rsrp = 0;
+    int ant_nb_re = 0;
     for(int k = k_start; k < k_end; k++){
       int re = (ssb_offset + k) % fp->ofdm_symbol_size;
-      rsrp += squaredMod(rxF_sss[re]);
-      nb_re++;
+      ant_rsrp += squaredMod(rxF_sss[re]);
+      ant_nb_re++;
     }
+    if (rsrp_per_ant)
+      rsrp_per_ant[aarx] = ant_nb_re ? ant_rsrp / ant_nb_re : 0;
+    rsrp += ant_rsrp;
+    nb_re += ant_nb_re;
   }
 
   rsrp /= nb_re;
@@ -184,17 +191,34 @@ void nr_ue_ssb_rsrp_measurements(PHY_VARS_NR_UE *ue,
 {
   const NR_DL_FRAME_PARMS *fp = &ue->frame_parms;
 
-  uint32_t rsrp_avg = nr_ue_calculate_ssb_rsrp(fp, rxdataF, fp->ssb_start_subcarrier);
+  uint32_t rsrp_per_ant[MAX_ANT] = {0};
+  uint32_t rsrp_avg = nr_ue_calculate_ssb_rsrp(fp, rxdataF, fp->ssb_start_subcarrier, rsrp_per_ant);
   float rsrp_db_per_re = 10 * log10(rsrp_avg);
 
   openair0_config_t *cfg0 = &openair0_cfg[ue->rf_map.card];
 
-  if (rsrp_avg == 0)
+  for (int ant = 0; ant < MAX_ANT; ant++)
+    ue->measurements.ssb_rsrp_per_ant_dBm[ssb_index][ant] = -200;
+
+  if (rsrp_avg == 0) {
     ue->measurements.ssb_rsrp_dBm[ssb_index] = -200; // lower than any value to be reported per Table 10.1.6.1-1 of 38.133
-  else
+  } else {
     ue->measurements.ssb_rsrp_dBm[ssb_index] = rsrp_db_per_re + 30 - SQ15_SQUARED_NORM_FACTOR_DB
                                                - ((int)cfg0->rx_gain[0] - (int)cfg0->rx_gain_offset[0])
                                                - dB_fixed(fp->ofdm_symbol_size);
+    const int rx_gain_db = (int)cfg0->rx_gain[0] - (int)cfg0->rx_gain_offset[0];
+    for (int ant = 0; ant < fp->nb_antennas_rx && ant < MAX_ANT; ant++) {
+      int ant_rx_gain_db = rx_gain_db;
+      if (cfg0->rx_gain[ant] > 0.0)
+        ant_rx_gain_db = (int)cfg0->rx_gain[ant] - (int)cfg0->rx_gain_offset[ant];
+      if (rsrp_per_ant[ant] == 0)
+        ue->measurements.ssb_rsrp_per_ant_dBm[ssb_index][ant] = -200;
+      else
+        ue->measurements.ssb_rsrp_per_ant_dBm[ssb_index][ant] =
+            (int)(10 * log10(rsrp_per_ant[ant]) + 30 - SQ15_SQUARED_NORM_FACTOR_DB
+                  - ant_rx_gain_db - dB_fixed(fp->ofdm_symbol_size));
+    }
+  }
 
   // to obtain non-integer dB value with a resoluion of 0.5dB
   uint32_t signal_pwr = rsrp_avg > ue->measurements.n0_power_avg ? rsrp_avg - ue->measurements.n0_power_avg : 0;
@@ -422,7 +446,8 @@ void do_neighboring_cell_measurements(UE_nr_rxtx_proc_t *proc, PHY_VARS_NR_UE *u
 
     // RSRP measurements
     uint8_t sss_symbol = SSS_SYMBOL_NB - PSS_SYMBOL_NB;
-    neighboring_cell_info->ssb_rsrp = nr_ue_calculate_ssb_rsrp(frame_parms, rxdataF[sss_symbol], frame_parms->ssb_start_subcarrier);
+    neighboring_cell_info->ssb_rsrp =
+        nr_ue_calculate_ssb_rsrp(frame_parms, rxdataF[sss_symbol], frame_parms->ssb_start_subcarrier, NULL);
 
     neighboring_cell_info->ssb_rsrp_dBm =
         10 * log10(neighboring_cell_info->ssb_rsrp) + 30 - SQ15_SQUARED_NORM_FACTOR_DB

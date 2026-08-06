@@ -167,6 +167,8 @@ int init_nr_ue_signal(PHY_VARS_NR_UE *ue, int nb_connected_gNB)
 
   for (int i = 0; i < fp->Lmax; i++) {
     ue->measurements.ssb_rsrp_dBm[i] = INT_MIN;
+    for (int ant = 0; ant < MAX_ANT; ant++)
+      ue->measurements.ssb_rsrp_per_ant_dBm[i][ant] = INT_MIN;
     ue->measurements.ssb_sinr_dB[i] = INT_MIN;
   }
 

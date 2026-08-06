@@ -7,6 +7,7 @@ from collections import deque
 from typing import Deque, Dict, List
 
 import pyqtgraph as pg
+from PyQt5.QtGui import QPalette
 from PyQt5.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -65,6 +66,51 @@ class MetricPlot(QWidget):
         self.plot.getViewBox().updateAutoRange()
 
 
+class AntennaRsrpPlot(QWidget):
+    """Small bar chart for per-RX-antenna SS-RSRP in the measurements panel."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.plot = pg.PlotWidget()
+        self.plot.setFixedHeight(100)
+        self.plot.setBackground(self.palette().color(QPalette.Window))
+        for axis_name in ("left", "bottom"):
+            axis = self.plot.getAxis(axis_name)
+            axis.setPen(pg.mkPen("#333333"))
+            axis.setTextPen(pg.mkPen("#333333"))
+        self.plot.setLabel("bottom", "RX antenna")
+        self.plot.setLabel("left", "RSRP", units="dBm")
+        self.plot.setMouseEnabled(x=False, y=False)
+        self.plot.hideButtons()
+        self.plot.showGrid(x=True, y=True, alpha=0.3)
+        self.plot.setYRange(-150, -40, padding=0.1)
+        self.plot.setXRange(-0.5, 3.5, padding=0)
+        layout.addWidget(self.plot)
+
+    def update_values(self, values: List[float]) -> None:
+        self.plot.clear()
+        n = len(values)
+        self.plot.getAxis("bottom").setTicks([[(i, f"RX{i}") for i in range(n)]])
+        if n == 0:
+            self.plot.setXRange(-0.5, 3.5, padding=0)
+            return
+
+        base = -150.0
+        tops = [max(float(v), base) for v in values]
+        bars = pg.BarGraphItem(
+            x=list(range(n)),
+            y0=[base] * n,
+            y1=tops,
+            width=0.65,
+            brush=pg.mkBrush("#1f77b4"),
+        )
+        self.plot.addItem(bars)
+        self.plot.setXRange(-0.6, n - 0.4, padding=0)
+
+
 class PlotManager(QWidget):
     """Three vertically-stacked metric plots."""
 
@@ -73,7 +119,7 @@ class PlotManager(QWidget):
         layout = QVBoxLayout(self)
         self.throughput = MetricPlot("Throughput", ["throughput"])
         self.pdsch = MetricPlot(
-            "PDSCH Metrics", ["bler", "rsrp", "sinr", "mcs", "nprb"]
+            "PDSCH Metrics", ["rsrp", "bler", "sinr", "mcs", "nprb"]
         )
         self.csi = MetricPlot(
             "CSI Channel Quality",

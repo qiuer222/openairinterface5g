@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 import csv
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -37,7 +38,7 @@ if __package__ in (None, ""):
 from gui.csi_reader import CsiRsReader
 from gui.iperf_controller import IperfController
 from gui.meas_reader import MeasDlReader
-from gui.plot_manager import PlotManager
+from gui.plot_manager import AntennaRsrpPlot, PlotManager
 
 
 DEFAULT_CONFIG = {
@@ -50,6 +51,7 @@ DEFAULT_CONFIG = {
 }
 REFRESH_MS = 500
 GUI_DIR = os.path.dirname(os.path.abspath(__file__))
+RESTART_EXIT_CODE = 77
 
 
 def load_config(path: Optional[str] = None) -> Dict:
@@ -124,12 +126,18 @@ class MainWindow(QMainWindow):
         self.ul_button = QPushButton("UL")
         self.dl_button = QPushButton("DL")
         self.stop_button = QPushButton("Stop")
+        self.restart_button = QPushButton("Restart")
+        self.restart_button.setToolTip(
+            "Close and reopen the GUI to reattach shared memory"
+        )
         self.ul_button.clicked.connect(self._start_ul)
         self.dl_button.clicked.connect(self._start_dl)
         self.stop_button.clicked.connect(self._stop_iperf)
+        self.restart_button.clicked.connect(self._restart_gui)
         buttons.addWidget(self.ul_button)
         buttons.addWidget(self.dl_button)
         buttons.addWidget(self.stop_button)
+        buttons.addWidget(self.restart_button)
         form.addRow(buttons)
         self.throughput_label = QLabel("Throughput: --")
         left.addWidget(self.throughput_label)
@@ -141,6 +149,8 @@ class MainWindow(QMainWindow):
         self.meas_label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.meas_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         meas_layout.addWidget(self.meas_label)
+        self.rsrp_plot = AntennaRsrpPlot()
+        meas_layout.addWidget(self.rsrp_plot)
         left.addWidget(meas_group)
 
         log_group = QGroupBox("iperf Log")
@@ -188,6 +198,19 @@ class MainWindow(QMainWindow):
         self.iperf.stop()
         self._close_csv()
         self.status_label.setText("iperf3 stopped")
+
+    def _restart_gui(self) -> None:
+        self._stop_resources()
+        app = QApplication.instance()
+        if app is not None:
+            app.exit(RESTART_EXIT_CODE)
+
+    def _stop_resources(self) -> None:
+        self.timer.stop()
+        self.iperf.stop()
+        self._close_csv()
+        self.meas_reader.close()
+        self.csi_reader.close()
 
     def _ui_config(self) -> Dict:
         return {
@@ -241,6 +264,8 @@ class MainWindow(QMainWindow):
         self.plot_manager.csi.add_sample(t, values)
 
     def _update_meas_text(self, meas: Dict) -> None:
+        rsrp_per_ant = meas.get("rsrp_per_ant", [])
+        self.rsrp_plot.update_values(rsrp_per_ant)
         lines = [
             f"Frame: {meas.get('frame', 0)}  Slot: {meas.get('slot', 0)}",
             f"BLER: {meas.get('bler', 0)} %",
@@ -256,6 +281,11 @@ class MainWindow(QMainWindow):
                 f"CSI: C={self._last_csi.get('capacity', 0):.2f} "
                 f"rank={self._last_csi.get('rank', 0)} "
                 f"cond={self._last_csi.get('condition_number', 0):.1f}"
+            )
+        if rsrp_per_ant:
+            lines.append(
+                "Ant RSRP: "
+                + ", ".join(f"RX{i}: {int(v)} dBm" for i, v in enumerate(rsrp_per_ant))
             )
         self.meas_label.setText("\n".join(lines))
 
@@ -273,11 +303,7 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"iperf error: {msg}")
 
     def closeEvent(self, event) -> None:
-        self.timer.stop()
-        self.iperf.stop()
-        self._close_csv()
-        self.meas_reader.close()
-        self.csi_reader.close()
+        self._stop_resources()
         if os.path.exists(self._log_path):
             answer = QMessageBox.question(
                 self,
@@ -292,6 +318,10 @@ class MainWindow(QMainWindow):
                 except OSError as exc:
                     self.status_label.setText(f"could not delete iperf log: {exc}")
         super().closeEvent(event)
+
+    @staticmethod
+    def _restart_command() -> List[str]:
+        return [sys.executable, os.path.abspath(__file__), *sys.argv[1:]]
 
     @staticmethod
     def _resolve_log_path(path: str) -> str:
@@ -343,6 +373,7 @@ class MainWindow(QMainWindow):
             "nsymb", "rv", "new_data_indicator", "target_code_rate",
             "bitrate_bps", "dlsch_received", "dlsch_errors", "bler",
             "rsrp_dBm", "rssi_dBm", "sinr_dB", "freq_offset_hz",
+            "rsrp_ant0_dBm", "rsrp_ant1_dBm", "rsrp_ant2_dBm", "rsrp_ant3_dBm",
             "n_rb_dl", "scs", "nb_antennas_rx",
         ])
         self._csv_fd.flush()
@@ -355,6 +386,8 @@ class MainWindow(QMainWindow):
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         sv = list(self._last_csi.get("singular_values", []))[:8]
         sv += [0.0] * (8 - len(sv))
+        rsrp_per_ant = list(self._last_meas.get("rsrp_per_ant", []))[:4]
+        rsrp_per_ant += [0] * (4 - len(rsrp_per_ant))
         self._csv_writer.writerow([
             stamp,
             self._iperf_bps / 1e6,
@@ -381,6 +414,7 @@ class MainWindow(QMainWindow):
             self._last_meas.get("rssi", 0),
             self._last_meas.get("sinr", 0.0),
             self._last_meas.get("freq_offset", 0),
+            *rsrp_per_ant,
             self._last_meas.get("n_rb_dl", 0),
             self._last_meas.get("scs", 0),
             self._last_meas.get("nb_antennas_rx", 0),
@@ -415,7 +449,16 @@ def main() -> None:
     config = load_config()
     win = MainWindow(config)
     win.show()
-    sys.exit(app.exec_())
+    exit_code = app.exec_()
+    if exit_code == RESTART_EXIT_CODE:
+        try:
+            subprocess.Popen(MainWindow._restart_command())
+        except OSError as exc:
+            print(f"failed to restart GUI: {exc}", file=sys.stderr)
+            exit_code = 1
+        else:
+            exit_code = 0
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

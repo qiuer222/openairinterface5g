@@ -360,7 +360,7 @@ static void nr_scan_ssb(void *arg)
                                                          &ssbInfo->pbchResult,
                                                          rxdataF); // start pbch detection at first symbol after pss
       if (ssbInfo->syncRes.cell_detected) {
-        uint32_t rsrp_avg = nr_ue_calculate_ssb_rsrp(ssbInfo->fp, rxdataF[2], ssbInfo->gscnInfo.ssbFirstSC);
+        uint32_t rsrp_avg = nr_ue_calculate_ssb_rsrp(ssbInfo->fp, rxdataF[2], ssbInfo->gscnInfo.ssbFirstSC, NULL);
         int rsrp_db_per_re = 10 * log10(rsrp_avg);
         ssbInfo->adjust_rxgain = TARGET_RX_POWER - rsrp_db_per_re;
         LOG_I(PHY, "pbch rx ok. rsrp:%d dB/RE, adjust_rxgain:%d dB\n", rsrp_db_per_re, ssbInfo->adjust_rxgain);

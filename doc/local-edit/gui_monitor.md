@@ -83,7 +83,7 @@ seq, frame, slot,
 mcs, qam_mod_order, tbs, num_layers, num_rbs, num_symbols,
 rv, new_data_indicator, target_code_rate,
 bitrate_bps, dlsch_received, dlsch_errors, dlsch_fer,
-rsrp_dBm, rssi_dBm, wideband_sinr_dB,
+rsrp_dBm, rsrp_per_ant_dBm[4], rssi_dBm, wideband_sinr_dB,
 n_rb_dl, subcarrier_spacing, freq_offset, nb_antennas_rx
 ```
 
@@ -96,6 +96,9 @@ n_rb_dl, subcarrier_spacing, freq_offset, nb_antennas_rx
 - MCS/Qm/TBS/layers/nPRB are recorded even if PDSCH demodulation or decoding
   fails, so the GUI still shows the scheduled parameters.
 - RSRP is read from `ue->measurements.ssb_rsrp_dBm[frame_parms.ssb_index]`.
+  Per-antenna SS-RSRP is copied from
+  `ue->measurements.ssb_rsrp_per_ant_dBm[ssb_index][]` into
+  `meas_tmp.rsrp_per_ant_dBm[]`.
   The old `rsrp_dBm[0]` field is not populated by NR UE PHY and is no longer
   used.
 - Both regions use a monotonic `seq` counter and a memory barrier. The writer
@@ -111,7 +114,7 @@ All files are under `gui/`.
 | `iperf_controller.py` | QThread running iperf3, appends to `gui/iperf.log`, parses `X bits/sec` lines |
 | `meas_reader.py` | Reads `/dev/shm/meas_dl` with `ctypes`, returns a dict of PDSCH/RF metrics |
 | `csi_reader.py` | Reads `/dev/shm/csi_rs_channel`, computes capacity, singular values, rank, condition number |
-| `plot_manager.py` | Three pyqtgraph panels: throughput, PDSCH metrics, CSI quality |
+| `plot_manager.py` | Three pyqtgraph panels: throughput, PDSCH metrics, CSI quality, plus the per-antenna RSRP bar chart |
 | `config.json` | `bs_ip`, `iperf_port`, `iperf_time`, `log_file`, `dl_reverse_client`, `snr_db` |
 | `requirements.txt` | `PyQt5`, `pyqtgraph`, `numpy` |
 | `run_perf_gui.sh` | Activates `.venv` and launches `python3 -m gui.oai_perf_monitor` |
@@ -187,6 +190,7 @@ frame, slot, mcs, qm, tbs_bits, layers, nprb, nsymb, rv,
 new_data_indicator, target_code_rate, bitrate_bps,
 dlsch_received, dlsch_errors, bler,
 rsrp_dBm, rssi_dBm, sinr_dB, freq_offset_hz,
+rsrp_ant0_dBm, rsrp_ant1_dBm, rsrp_ant2_dBm, rsrp_ant3_dBm,
 n_rb_dl, scs, nb_antennas_rx
 ```
 
@@ -257,12 +261,15 @@ On a Wayland GNOME session, the launcher automatically sets
 | `UL` | Starts `iperf3 -c <bs_ip> -t <duration>` |
 | `DL` | Starts the DL command from `config.json`; default is UE-side server, configurable to reverse client |
 | `Stop` | Terminates iperf3 and closes the current CSV |
+| `Restart` | Closes shared-memory readers and relaunches the GUI to reattach `/dev/shm` after the UE restarts |
 
 The left panel shows:
 
 ```text
 Throughput: 150.0 Mbps
 BLER / RSRP / SINR / MCS / NPRB / Layers / Qm / TBS / Freq offset
+Ant RSRP: RX0: -88 dBm, RX1: -91 dBm
+per-antenna RSRP bar chart
 ```
 
 The right panel contains three plots:

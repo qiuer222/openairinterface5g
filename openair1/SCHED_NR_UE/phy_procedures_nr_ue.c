@@ -1349,6 +1349,10 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
     const int ssb_idx = ue->frame_parms.ssb_index;
     const int ssb_rsrp = ue->measurements.ssb_rsrp_dBm[ssb_idx];
     meas_tmp.rsrp_dBm = (ssb_rsrp > -190) ? ssb_rsrp : 0;
+    for (int ant = 0; ant < ue->frame_parms.nb_antennas_rx && ant < CSI_RS_MAX_RX_ANT; ant++) {
+      const int ssb_rsrp_ant = ue->measurements.ssb_rsrp_per_ant_dBm[ssb_idx][ant];
+      meas_tmp.rsrp_per_ant_dBm[ant] = (ssb_rsrp_ant > -190) ? ssb_rsrp_ant : 0;
+    }
     meas_tmp.rssi_dBm = ue->measurements.rx_rssi_dBm[gNB_id];
     meas_tmp.wideband_sinr_dB = (int16_t)ue->measurements.wideband_cqi_tot[gNB_id];
     meas_tmp.n_rb_dl = ue->frame_parms.N_RB_DL;

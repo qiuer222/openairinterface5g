@@ -72,6 +72,7 @@ typedef struct __attribute__((packed)) {
   uint8_t   dlsch_fer;             /* percentage (0-100)            */
   /* PHY measurements */
   int32_t   rsrp_dBm;              /* serving cell RSRP in dBm      */
+  int32_t   rsrp_per_ant_dBm[CSI_RS_MAX_RX_ANT]; /* per-RX-antenna SS-RSRP in dBm */
   int16_t   rssi_dBm;              /* RSSI in dBm                   */
   int16_t   wideband_sinr_dB;      /* SINR from wideband_cqi_tot   */
   /* system / carrier info */

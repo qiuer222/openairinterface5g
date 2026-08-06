@@ -111,6 +111,7 @@ typedef struct {
   uint32_t rsrp[7];
   short rsrp_dBm[7];
   int ssb_rsrp_dBm[64];
+  int ssb_rsrp_per_ant_dBm[64][MAX_ANT];
   float ssb_sinr_dB[64];
   // common measurements
   //! total estimated noise power (linear)

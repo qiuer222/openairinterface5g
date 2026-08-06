@@ -86,7 +86,8 @@ void nr_ue_measurements(PHY_VARS_NR_UE *ue,
 
 uint32_t nr_ue_calculate_ssb_rsrp(const NR_DL_FRAME_PARMS *fp,
                                   const c16_t rxdataF[][fp->ofdm_symbol_size],
-                                  int ssb_start_subcarrier);
+                                  int ssb_start_subcarrier,
+                                  uint32_t *rsrp_per_ant);
 
 void nr_ue_ssb_rsrp_measurements(PHY_VARS_NR_UE *ue,
                                  int ssb_index,
