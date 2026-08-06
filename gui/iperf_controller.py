@@ -89,6 +89,26 @@ class IperfController(QThread):
         ]
         self.start()
 
+    def start_ul_server(self, port: int, log_path: str) -> None:
+        """Start gNB-side UL server for UE→gNB upload."""
+        self._log_path = log_path
+        #self._cmd = ["iperf3", "-s", "-p", str(port), "-i", "1"]
+        self._cmd = ["sudo", "docker", "exec", "-it", "oai-ext-dn", "iperf3", "-s", "-p", str(port)]
+        print("running iperf3 server with command:", " ".join(self._cmd))
+        self.start()
+
+    def start_dl_client(self, ue_ip: str, port: int, duration: int, log_path: str) -> None:
+        """Start gNB-side DL client for gNB→UE download."""
+        self._log_path = log_path
+        self._cmd = [
+            "iperf3",
+            "-c", ue_ip,
+            "-p", str(port),
+            "-t", str(duration),
+            "-i", "1",
+        ]
+        self.start()
+
     def stop(self) -> None:
         if self._proc is not None:
             self._proc.terminate()

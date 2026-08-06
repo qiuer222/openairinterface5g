@@ -189,4 +189,4 @@ already the gain used by RSRP.
 - `openair1/SCHED_NR_UE/phy_procedures_nr_ue.c`
 - `gui/meas_reader.py`
 - `gui/plot_manager.py`
-- `gui/oai_perf_monitor.py`
+- `gui/oai_ue_monitor.py`

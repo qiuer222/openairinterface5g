@@ -11,6 +11,7 @@
 #include "NR_MAC_COMMON/nr_mac.h"
 #include "NR_MAC_gNB/nr_mac_gNB.h"
 #include "LAYER2/NR_MAC_gNB/mac_proto.h"
+#include "PHY/NR_TRANSPORT/gNB_shm.h"
 #include "openair2/LAYER2/nr_rlc/nr_rlc_oai_api.h"
 
 /*TAG*/
@@ -1188,6 +1189,39 @@ static void generate_dl_mac_pdu(gNB_MAC_INST *mac,
       T_BUFFER(harq->transportBlock.buf, TBS));
     T(T_GNB_MAC_DL, T_INT(rnti), T_INT(frame), T_INT(slot), T_INT(sched_pdsch->mcs), T_INT(TBS));
   }
+
+  gnb_dl_meas_shm_t m = {0};
+  m.frame = frame;
+  m.slot = slot;
+  m.rnti = rnti;
+  m.dlsch_received = (uint32_t)UE->mac_stats.dl.rounds[0];
+  m.dlsch_errors = (uint32_t)UE->mac_stats.dl.errors;
+  m.bler_x1000 = (uint16_t)(sched_ctrl->dl_bler_stats.bler * 1000.0f);
+  if (UE->mac_stats.num_sinr_meas > 0)
+    m.sinr_db_x10 = (int16_t)(UE->mac_stats.cumul_sinrx10 / UE->mac_stats.num_sinr_meas);
+  else {
+    const int sinrx10 = sched_ctrl->CSI_report.ssb_rsrp_report.r[0].SINRx10;
+    if (sinrx10 >= INT16_MIN && sinrx10 <= INT16_MAX)
+      m.sinr_db_x10 = (int16_t)sinrx10;
+    else
+      m.sinr_db_x10 = (int16_t)(nr_mac_get_snr(&sched_ctrl->pucch_pc) * 10.0f);
+  }
+  m.mcs = sched_pdsch->mcs;
+  m.qam_mod_order = sched_pdsch->Qm;
+  m.tbs = sched_pdsch->tb_size;
+  m.num_layers = sched_pdsch->nrOfLayers;
+  m.num_rbs = sched_pdsch->rbSize;
+  m.num_symbols = sched_pdsch->tda_info.nrOfSymbols;
+  m.rv = 0;
+  m.new_data_indicator = harq->ndi;
+  m.target_code_rate = sched_pdsch->R;
+  m.cqi = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb;
+  const uint8_t csi_ri = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri + 1;
+  m.ri = csi_ri > 0 ? csi_ri : sched_pdsch->nrOfLayers;
+  m.pmi_x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
+  m.pmi_x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
+  m.n_rb_dl = sched_pdsch->bwp_info.bwpSize;
+  gNB_shm_write_dl_sched(&m);
 }
 
 static void fill_dl_tx_request(post_process_pdsch_t *pdsch,

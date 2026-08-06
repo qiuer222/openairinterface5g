@@ -1,0 +1,7 @@
+{
+  "ue_ip": "192.168.70.135",
+  "iperf_port": 5201,
+  "iperf_time": 30,
+  "log_file": "gui/gnb_iperf.log",
+  "snr_db": 20.0
+}

@@ -8,6 +8,7 @@
 
 
 #include "LAYER2/NR_MAC_gNB/mac_proto.h"
+#include "PHY/NR_TRANSPORT/gNB_shm.h"
 #include "executables/softmodem-common.h"
 #include "common/utils/nr/nr_common.h"
 #include "utils.h"
@@ -700,6 +701,25 @@ static void handle_nr_ul_harq(gNB_MAC_INST *nrmac, NR_UE_info_t *UE, rnti_t rnti
   remove_front_nr_list(&sched_ctrl->feedback_ul_harq);
   NR_UE_ul_harq_t *harq = &sched_ctrl->ul_harq_processes[harq_pid];
   DevAssert(harq->is_waiting);
+
+  gnb_ul_meas_shm_t m = {0};
+  m.frame = harq->sched_pusch.frame;
+  m.slot = harq->sched_pusch.slot;
+  m.rnti = rnti;
+  m.bler_x1000 = (uint16_t)(sched_ctrl->ul_bler_stats.bler * 1000.0f);
+  m.sinr_db_x10 = (int16_t)(sched_ctrl->pusch_pc.avg_snr * 10.0f);
+  m.mcs = harq->sched_pusch.mcs;
+  m.qam_mod_order = harq->sched_pusch.Qm;
+  m.tbs = harq->sched_pusch.tb_size;
+  m.num_layers = harq->sched_pusch.nrOfLayers;
+  m.num_rbs = harq->sched_pusch.rbSize;
+  m.num_symbols = harq->sched_pusch.tda_info.nrOfSymbols;
+  m.rv = 0;
+  m.new_data_indicator = harq->ndi;
+  m.target_code_rate = harq->sched_pusch.R;
+  m.n_rb_ul = harq->sched_pusch.bwp_info.bwpSize;
+  gNB_shm_write_ul_meas(&m, !crc_status);
+
   harq->feedback_slot = -1;
   harq->is_waiting = false;
   if (!crc_status) {

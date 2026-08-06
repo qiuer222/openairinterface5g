@@ -20,7 +20,7 @@ OAI NR UE (C)
 /dev/shm/csi_rs_channel      /dev/shm/meas_dl
   |
   v
-Python GUI (gui/oai_perf_monitor.py)
+Python GUI (gui/oai_ue_monitor.py)
   |
   |-- gui/iperf_controller.py   -> iperf3 process + real-time parsing
   |-- gui/meas_reader.py        -> /dev/shm/meas_dl
@@ -110,18 +110,18 @@ All files are under `gui/`.
 
 | File | Role |
 |---|---|
-| `oai_perf_monitor.py` | Main PyQt5 window, 500 ms refresh timer, UL/DL buttons, iperf.log-triggered CSV/channel saving |
+| `oai_ue_monitor.py` | Main PyQt5 window, 500 ms refresh timer, UL/DL buttons, iperf.log-triggered CSV/channel saving |
 | `iperf_controller.py` | QThread running iperf3, appends to `gui/iperf.log`, parses `X bits/sec` lines |
 | `meas_reader.py` | Reads `/dev/shm/meas_dl` with `ctypes`, returns a dict of PDSCH/RF metrics |
 | `csi_reader.py` | Reads `/dev/shm/csi_rs_channel`, computes capacity, singular values, rank, condition number |
 | `plot_manager.py` | Three pyqtgraph panels: throughput, PDSCH metrics, CSI quality, plus the per-antenna RSRP bar chart |
 | `config.json` | `bs_ip`, `iperf_port`, `iperf_time`, `log_file`, `dl_reverse_client`, `snr_db` |
 | `requirements.txt` | `PyQt5`, `pyqtgraph`, `numpy` |
-| `run_perf_gui.sh` | Activates `.venv` and launches `python3 -m gui.oai_perf_monitor` |
+| `run_ue_gui.sh` | Activates `.venv` and launches `python3 -m gui.oai_ue_monitor` |
 
 ### 3.1 Main refresh loop
 
-Every 500 ms, `oai_perf_monitor.py` refreshes the UI. CSV and channel
+Every 500 ms, `oai_ue_monitor.py` refreshes the UI. CSV and channel
 recording are no longer tied to that fixed timer; they are triggered by changes
 to `iperf.log`.
 
@@ -248,7 +248,7 @@ pip install -r gui/requirements.txt
 ### 5.3 Run the GUI
 
 ```bash
-./gui/run_perf_gui.sh
+./gui/run_ue_gui.sh
 ```
 
 On a Wayland GNOME session, the launcher automatically sets
@@ -294,7 +294,7 @@ The right panel contains three plots:
 
 ## 7. Local modifications: iperf.log-triggered recording and exit cleanup
 
-These changes are implemented in `gui/oai_perf_monitor.py`.
+These changes are implemented in `gui/oai_ue_monitor.py`.
 
 ### 7.1 CSV and channel recording
 

@@ -25,6 +25,7 @@
 #include "PHY/INIT/nr_phy_init.h"
 #include "PHY/MODULATION/nr_modulation.h"
 #include "PHY/NR_TRANSPORT/nr_transport_proto.h"
+#include "PHY/NR_TRANSPORT/gNB_shm.h"
 #include "PHY/TOOLS/tools_defs.h"
 #include "PHY/defs_RU.h"
 #include "PHY/defs_gNB.h"
@@ -344,6 +345,7 @@ void term_gNB_Tpool(int inst) {
 
   gNB_L1_proc_t *proc = &gNB->proc;
   pthread_join(proc->L1_stats_thread, NULL);
+  gNB_shm_close();
 }
 
 /// eNB kept in function name for nffapi calls, TO FIX
@@ -352,6 +354,7 @@ void init_eNB_afterRU(void)
   for (int inst = 0; inst < RC.nb_nr_L1_inst; inst++) {
     PHY_VARS_gNB *gNB = RC.gNB[inst];
     phy_init_nr_gNB(gNB);
+    gNB_shm_init();
 
     // map antennas and PRACH signals to gNB RX
     if (0) AssertFatal(gNB->num_RU>0,"Number of RU attached to gNB %d is zero\n",gNB->Mod_id);

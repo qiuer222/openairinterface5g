@@ -8,6 +8,7 @@
 #include "PHY/NR_TRANSPORT/nr_transport_proto.h"
 #include "PHY/NR_TRANSPORT/nr_dlsch.h"
 #include "PHY/NR_TRANSPORT/nr_ulsch.h"
+#include "PHY/NR_TRANSPORT/gNB_shm.h"
 #include "PHY/NR_TRANSPORT/nr_dci.h"
 #include "PHY/NR_ESTIMATION/nr_ul_estimation.h"
 #include "nfapi/open-nFAPI/nfapi/public_inc/nfapi_interface.h"
@@ -849,6 +850,20 @@ static void handle_srs(fsn_t now, PHY_VARS_gNB *gNB, const NR_gNB_SRS_job_t *srs
                                                 snr_per_rb,
                                                 &timing_advance_offset,
                                                 timing_advance_offset_nsec);
+
+  if (srs_est >= 0) {
+    gNB_shm_write_srs(now.f,
+                      now.s,
+                      srs_pdu->rnti,
+                      nb_antennas_rx,
+                      N_ap,
+                      N_symb_SRS,
+                      ofdm_symbol_size,
+                      frame_parms->N_RB_UL,
+                      frame_parms->subcarrier_spacing,
+                      (int16_t)(snr * 10),
+                      srs_estimated_channel_freq);
+  }
 
   if (get_softmodem_params()->record_srs_ch) {
     extern void dump_srs_channel(const c16_t *, int, int, int, int, int, int, uint32_t, int, int, int);

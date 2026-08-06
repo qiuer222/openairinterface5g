@@ -127,3 +127,26 @@ class PlotManager(QWidget):
         )
         for panel in (self.throughput, self.pdsch, self.csi):
             layout.addWidget(panel, 1)
+
+
+class GnbPlotManager(QWidget):
+    """Four vertically-stacked gNB metric plots: throughput, DL, UL and SRS."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        self.throughput = MetricPlot("Throughput", ["throughput"])
+        self.dl = MetricPlot(
+            "DL Measurements",
+            ["dl_sinr", "dl_bler", "dl_mcs", "dl_nprb", "dl_tbs"],
+        )
+        self.ul = MetricPlot(
+            "UL Measurements",
+            ["ul_sinr", "ul_bler", "ul_mcs", "ul_nprb", "ul_tbs"],
+        )
+        self.srs = MetricPlot(
+            "SRS Channel",
+            ["srs_capacity", "srs_rank", "srs_condition", "srs_snr"],
+        )
+        for panel in (self.throughput, self.dl, self.ul, self.srs):
+            layout.addWidget(panel, 1)

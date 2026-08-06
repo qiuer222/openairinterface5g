@@ -16,6 +16,18 @@ PY
   [ -n "$plugin" ] && [ -f "$plugin" ] || return 0
   ldd "$plugin" 2>/dev/null | grep -q "not found" || return 0
 
+  if [ "$(id -u)" -eq 0 ]; then
+    if ! command -v apt-get >/dev/null 2>&1; then
+      echo "Qt xcb is missing shared libraries." >&2
+      return 1
+    fi
+    DEBIAN_FRONTEND=noninteractive apt-get install -y libxcb-xinerama0 libxcb-cursor0
+    if ldd "$plugin" 2>/dev/null | grep -q "not found"; then
+      return 1
+    fi
+    return 0
+  fi
+
   cache="${XDG_CACHE_HOME:-$HOME/.cache}/oai-gui-qt-xcb"
   libdir="$cache/lib"
   if [ -f "$libdir/libxcb-xinerama.so.0" ] && [ -f "$libdir/libxcb-cursor.so.0" ]; then
@@ -55,7 +67,13 @@ PY
 
 ensure_xcb_runtime
 
+if [ -z "$XDG_RUNTIME_DIR" ] || [ ! -d "$XDG_RUNTIME_DIR" ]; then
+  export XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+fi
+
 if [ "$XDG_SESSION_TYPE" = "wayland" ] && [ -z "$QT_QPA_PLATFORM" ]; then
   export QT_QPA_PLATFORM=wayland
 fi
-exec python3 -m gui.oai_perf_monitor "$@"
+exec python3 -m gui.oai_ue_monitor "$@"

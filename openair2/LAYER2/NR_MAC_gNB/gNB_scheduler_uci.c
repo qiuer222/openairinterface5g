@@ -16,6 +16,7 @@
 #include "common/utils/T/T.h"
 #include "common/utils/nr/nr_common.h"
 #include "nfapi/oai_integration/vendor_ext.h"
+#include "PHY/NR_TRANSPORT/gNB_shm.h"
 static void nr_fill_nfapi_pucch(gNB_MAC_INST *nrmac, frame_t frame, slot_t slot, const NR_sched_pucch_t *pucch, NR_UE_info_t* UE)
 {
 
@@ -363,7 +364,52 @@ int get_pucch_resourceid(NR_PUCCH_Config_t *pucch_Config, int O_uci, int pucch_r
   return *resource_id;
 }
 
-static void handle_dl_harq(gNB_MAC_INST *mac, NR_UE_info_t * UE, int8_t harq_pid, bool success, int harq_round_max)
+static void write_gNB_dl_meas(NR_UE_info_t *UE,
+                              NR_UE_harq_t *harq,
+                              bool success,
+                              frame_t frame,
+                              slot_t slot)
+{
+  NR_UE_sched_ctrl_t *sched_ctrl = &UE->UE_sched_ctrl;
+  gnb_dl_meas_shm_t m = {0};
+  m.frame = frame;
+  m.slot = slot;
+  m.rnti = UE->rnti;
+  m.bler_x1000 = (uint16_t)(sched_ctrl->dl_bler_stats.bler * 1000.0f);
+  if (UE->mac_stats.num_sinr_meas > 0)
+    m.sinr_db_x10 = (int16_t)(UE->mac_stats.cumul_sinrx10 / UE->mac_stats.num_sinr_meas);
+  else {
+    const int sinrx10 = sched_ctrl->CSI_report.ssb_rsrp_report.r[0].SINRx10;
+    if (sinrx10 >= INT16_MIN && sinrx10 <= INT16_MAX)
+      m.sinr_db_x10 = (int16_t)sinrx10;
+    else
+      m.sinr_db_x10 = (int16_t)(nr_mac_get_snr(&sched_ctrl->pucch_pc) * 10.0f);
+  }
+  m.mcs = harq->sched_pdsch.mcs;
+  m.qam_mod_order = harq->sched_pdsch.Qm;
+  m.tbs = harq->sched_pdsch.tb_size;
+  m.num_layers = harq->sched_pdsch.nrOfLayers;
+  m.num_rbs = harq->sched_pdsch.rbSize;
+  m.num_symbols = harq->sched_pdsch.tda_info.nrOfSymbols;
+  m.rv = 0;
+  m.new_data_indicator = harq->ndi;
+  m.target_code_rate = harq->sched_pdsch.R;
+  m.cqi = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb;
+  const uint8_t csi_ri = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri + 1;
+  m.ri = csi_ri > 0 ? csi_ri : harq->sched_pdsch.nrOfLayers;
+  m.pmi_x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
+  m.pmi_x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
+  m.n_rb_dl = harq->sched_pdsch.bwp_info.bwpSize;
+  gNB_shm_write_dl_meas(&m, success);
+}
+
+static void handle_dl_harq(gNB_MAC_INST *mac,
+                           NR_UE_info_t *UE,
+                           int8_t harq_pid,
+                           bool success,
+                           frame_t frame,
+                           slot_t slot,
+                           int harq_round_max)
 {
   NR_UE_sched_ctrl_t *sched_ctrl = &UE->UE_sched_ctrl;
   NR_UE_harq_t *harq = &sched_ctrl->harq_processes[harq_pid];
@@ -851,6 +897,13 @@ static void extract_pucch_csi_report(NR_CSI_MeasConfig_t *csi_MeasConfig,
       }
     }
   }
+  gNB_shm_update_dl_csi(
+      UE->rnti,
+      sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb,
+      get_dl_nrOfLayers(sched_ctrl, UE->current_DL_BWP.dci_format),
+      sched_ctrl->CSI_report.ssb_rsrp_report.r[0].SINRx10,
+      sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1,
+      sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2);
   if ((new_bf_index !=-1) && !nrmac->radio_config.do_TCI)
     // Trigger RRCReconfiguration. Need to be out of the for loop as it may modify csi_MeasConfig
     beam_switching_procedure(nrmac, UE, new_bf_index);
@@ -881,7 +934,7 @@ static NR_UE_harq_t *find_harq(frame_t frame, slot_t slot, NR_UE_info_t * UE, in
           frame,
           slot);
     remove_front_nr_list(&sched_ctrl->feedback_dl_harq);
-    handle_dl_harq(NULL, UE, pid, false, harq_round_max);
+    handle_dl_harq(NULL, UE, pid, false, frame, slot, harq_round_max);
     pid = sched_ctrl->feedback_dl_harq.head;
     if (pid < 0)
       return NULL;
@@ -944,7 +997,7 @@ void handle_nr_uci_pucch_0_1(module_id_t mod_id, frame_t frame, slot_t slot, con
         nr_timer_start(&sched_ctrl->tci_beam_switch);
         harq->start_tci_timer = false;
       }
-      handle_dl_harq(nrmac, UE, pid, success, nrmac->dl_bler.harq_round_max);
+      handle_dl_harq(nrmac, UE, pid, success, frame, slot, nrmac->dl_bler.harq_round_max);
       if (is_ra) {
         bool ue_rejected = nr_check_Msg4_MsgB_Ack(mod_id, frame, slot, UE, success);
         if (ue_rejected) {
@@ -1002,6 +1055,8 @@ void handle_nr_uci_pucch_2_3_4(module_id_t mod_id, frame_t frame, slot_t slot, c
   }
 
   NR_UE_sched_ctrl_t *sched_ctrl = &UE->UE_sched_ctrl;
+  NR_UE_harq_t *dl_harq_meas = NULL;
+  bool dl_harq_success = false;
 
   // tpc (power control)
   // TODO PUCCH2 SNR computation is not correct -> ignore the following
@@ -1044,7 +1099,9 @@ void handle_nr_uci_pucch_2_3_4(module_id_t mod_id, frame_t frame, slot_t slot, c
         nr_timer_start(&sched_ctrl->tci_beam_switch);
         harq->start_tci_timer = false;
       }
-      handle_dl_harq(nrmac, UE, pid, success, nrmac->dl_bler.harq_round_max);
+      handle_dl_harq(nrmac, UE, pid, success, frame, slot, nrmac->dl_bler.harq_round_max);
+      dl_harq_meas = harq;
+      dl_harq_success = success;
     }
     free(uci_234->harq.harq_payload);
   }
@@ -1055,6 +1112,8 @@ void handle_nr_uci_pucch_2_3_4(module_id_t mod_id, frame_t frame, slot_t slot, c
       if (csi_MeasConfig != NULL) {
         // API to parse the csi report and store it into sched_ctrl
         extract_pucch_csi_report(csi_MeasConfig, uci_234, frame, slot, UE, nrmac);
+        if (dl_harq_meas != NULL)
+          write_gNB_dl_meas(UE, dl_harq_meas, dl_harq_success, frame, slot);
       }
     }
     free(uci_234->csi_part1.csi_part1_payload);

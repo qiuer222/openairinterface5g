@@ -4,7 +4,7 @@
 
 This document explains the offline analysis code under `gui/analysis/`.
 It uses the CSV file and recorded CSI channel matrices produced by
-`gui/oai_perf_monitor.py` to compute theoretical link-capacity metrics,
+`gui/oai_ue_monitor.py` to compute theoretical link-capacity metrics,
 correlation coefficients, throughput-prediction accuracy, and stream-selection
 accuracy.
 
