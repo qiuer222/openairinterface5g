@@ -64,6 +64,11 @@ DL client side, `test_round` increments every time DL is clicked. On the gNB UL
 server side, it increments when the iperf log resumes after an idle gap. The
 counter resets to zero when the GUI process restarts.
 
+At startup the GUI clears the configured iperf log. On exit it asks whether the
+CSV, SRS channel data, and iperf log should be moved into
+`gui/record/<user_folder>/`. The default folder name is the first CSV timestamp;
+if the folder already exists, the GUI asks for another name.
+
 iperf3 pairing:
 
 - gNB UL button: gNB runs a server; the UE side should run the iperf3 client.

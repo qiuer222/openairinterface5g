@@ -135,8 +135,9 @@ to `iperf.log`.
 5. update throughput / PDSCH / CSI plots every 500 ms
 ```
 
-The log-change baseline is reset when a new test CSV is opened, so an existing
-`iperf.log` is not treated as a new event just because the GUI was restarted.
+The log-change baseline is reset when the run CSV is opened at GUI startup, so
+an existing `iperf.log` is not treated as a new event just because the GUI was
+restarted.
 
 ### 3.2 iperf3 real-time output
 
@@ -178,6 +179,9 @@ Valid subcarriers are averaged. The average singular values are exposed as
 ### 4.1 `gui/iperf.log`
 
 All iperf3 stdout is appended in real time.
+
+The file is cleared when the GUI starts, so each GUI run begins with an empty
+iperf log.
 
 ### 4.2 `gui/record/gui_ue_log_<timestamp>.csv`
 
@@ -266,8 +270,8 @@ On a Wayland GNOME session, the launcher automatically sets
 |---|---|
 | `UL` | Starts `iperf3 -c <bs_ip> -t <duration>` |
 | `DL` | Starts the DL command from `config.json`; default is UE-side server, configurable to reverse client |
-| `Stop` | Terminates iperf3 and closes the current CSV |
-| `Restart` | Closes shared-memory readers and relaunches the GUI to reattach `/dev/shm` after the UE restarts |
+| `Stop` | Terminates iperf3; does not close or create a new CSV |
+| `Restart` | Closes shared-memory readers and relaunches the GUI, which creates a new CSV for the new run |
 
 The left panel shows:
 
@@ -304,6 +308,11 @@ These changes are implemented in `gui/oai_ue_monitor.py`.
 
 ### 7.1 CSV and channel recording
 
+- One CSV file is created at GUI startup and used for the whole run. Clicking
+  `UL`/`DL` or `Stop` does not create a new file.
+- `test_round` is written in every CSV row. Client-side tests increment it on
+  each `UL`/`DL` click; server-side tests increment it when the iperf log
+  resumes after an idle gap.
 - `_iperf_log_changed()` compares the current `iperf.log` `st_size` and
   `st_mtime_ns` with the last seen state.
 - `_reset_log_state()` records the file state when the run CSV is opened.
@@ -314,14 +323,19 @@ These changes are implemented in `gui/oai_ue_monitor.py`.
   aligned directly in offline analysis.
 - The CSV header and every appended row are flushed to disk immediately.
 
-### 7.2 Exit-time iperf.log cleanup
+### 7.2 Startup cleanup and exit-time archive
 
 - `closeEvent()` stops the timer and iperf3 process, closes the CSV, and closes
   the shared-memory readers.
-- If the configured `iperf.log` exists, the GUI asks:
-  `Delete <configured iperf.log>?`
-- Selecting **Yes** deletes the file with `os.remove()`. Selecting **No**
-  leaves it unchanged.
+- At startup, the configured `iperf.log` is cleared, so each GUI run starts with
+  an empty log.
+- On exit, the GUI asks whether the CSV, channel data, and iperf log should be
+  saved.
+- The default archive folder name is the first CSV timestamp. If the folder
+  already exists, the GUI asks for another name.
+- Choosing **OK** moves the CSV, channel/srs files, and iperf log into:
+  `gui/record/<user_folder>/`
+- Choosing **Cancel** leaves the data in their original locations.
 
 ### 7.3 Log path handling
 

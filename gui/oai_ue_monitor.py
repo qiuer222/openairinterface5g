@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -21,6 +22,7 @@ from PyQt5.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -94,10 +96,12 @@ class MainWindow(QMainWindow):
         self._csv_writer = None
         self._csv_path: Optional[str] = None
         self._channel_dir: Optional[str] = None
+        self._csv_start_ts = ""
         self._test_round = 0
         self._log_based_test_round = False
         self._last_log_change_time: Optional[float] = None
 
+        self._clear_log_file()
         self._build_ui()
         self._open_csv()
 
@@ -314,19 +318,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._stop_resources()
-        if os.path.exists(self._log_path):
-            answer = QMessageBox.question(
-                self,
-                "Clear iperf log",
-                f"Delete {self._log_path}?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
-            )
-            if answer == QMessageBox.Yes:
-                try:
-                    os.remove(self._log_path)
-                except OSError as exc:
-                    self.status_label.setText(f"could not delete iperf log: {exc}")
+        self._ask_archive_recordings()
         super().closeEvent(event)
 
     @staticmethod
@@ -366,6 +358,7 @@ class MainWindow(QMainWindow):
     def _open_csv(self) -> None:
         self._close_csv()
         ts = time.strftime("%Y%m%d_%H%M%S")
+        self._csv_start_ts = ts
         record_dir = os.path.join(GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)
         csv_base = f"gui_ue_log_{ts}"
@@ -445,8 +438,61 @@ class MainWindow(QMainWindow):
             self._csv_fd.close()
         self._csv_fd = None
         self._csv_writer = None
-        self._csv_path = None
-        self._channel_dir = None
+
+    def _clear_log_file(self) -> None:
+        try:
+            log_dir = os.path.dirname(self._log_path)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            open(self._log_path, "w", encoding="utf-8").close()
+        except OSError:
+            pass
+
+    def _ask_archive_recordings(self) -> None:
+        if not self._csv_path or not os.path.exists(self._csv_path):
+            return
+        default_name = self._csv_start_ts or time.strftime("%Y%m%d_%H%M%S")
+        text, ok = QInputDialog.getText(
+            self,
+            "Save recorded data?",
+            "Save CSV, channel data and iperf log as folder name:",
+            text=default_name,
+        )
+        if not ok:
+            return
+
+        record_dir = os.path.join(GUI_DIR, "record")
+        folder_name = os.path.basename(text.strip())
+        dest = os.path.join(record_dir, folder_name)
+        while not folder_name or os.path.exists(dest):
+            QMessageBox.warning(
+                self,
+                "Folder exists",
+                f"{dest} already exists. Choose another name.",
+            )
+            text, ok = QInputDialog.getText(
+                self,
+                "Save recorded data?",
+                "Save CSV, channel data and iperf log as folder name:",
+                text=default_name,
+            )
+            if not ok:
+                return
+            folder_name = os.path.basename(text.strip())
+            dest = os.path.join(record_dir, folder_name)
+
+        os.makedirs(dest, exist_ok=True)
+        shutil.move(self._csv_path, os.path.join(dest, os.path.basename(self._csv_path)))
+        if self._channel_dir and os.path.isdir(self._channel_dir):
+            for name in os.listdir(self._channel_dir):
+                shutil.move(
+                    os.path.join(self._channel_dir, name),
+                    os.path.join(dest, name),
+                )
+            os.rmdir(self._channel_dir)
+        if os.path.exists(self._log_path):
+            shutil.move(self._log_path, os.path.join(dest, os.path.basename(self._log_path)))
+        self.status_label.setText(f"recordings saved to {dest}")
 
 
 def main() -> None:
