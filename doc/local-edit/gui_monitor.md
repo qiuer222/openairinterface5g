@@ -181,7 +181,8 @@ All iperf3 stdout is appended in real time.
 
 ### 4.2 `gui/record/gui_ue_log_<timestamp>.csv`
 
-Created when UL or DL is started. Column layout:
+Created once when the GUI starts; one CSV file is used for the whole GUI run.
+Column layout:
 
 ```text
 timestamp, test_round, throughput_mbps,
@@ -199,6 +200,11 @@ n_rb_dl, scs, nb_antennas_rx
 ```text
 20260802_223124_731830
 ```
+
+`test_round` identifies the iperf test round. On client-side tests it is
+incremented each time UL/DL is clicked. On server-side tests it is incremented
+when the iperf log resumes after an idle gap. The counter resets to zero when
+the GUI process restarts.
 
 ### 4.3 `gui/record/gui_ue_log_<timestamp>/channel_<timestamp>.npy`
 
@@ -300,7 +306,7 @@ These changes are implemented in `gui/oai_ue_monitor.py`.
 
 - `_iperf_log_changed()` compares the current `iperf.log` `st_size` and
   `st_mtime_ns` with the last seen state.
-- `_reset_log_state()` records the file state when a new test CSV is opened.
+- `_reset_log_state()` records the file state when the run CSV is opened.
   This prevents old log contents from creating a false first sample.
 - `_refresh()` only calls `_save_channel()` and `_write_csv()` when
   `_iperf_log_changed()` returns true.

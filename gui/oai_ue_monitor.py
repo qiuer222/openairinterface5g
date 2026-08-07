@@ -95,8 +95,11 @@ class MainWindow(QMainWindow):
         self._csv_path: Optional[str] = None
         self._channel_dir: Optional[str] = None
         self._test_round = 0
+        self._log_based_test_round = False
+        self._last_log_change_time: Optional[float] = None
 
         self._build_ui()
+        self._open_csv()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh)
@@ -172,7 +175,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _start_ul(self) -> None:
-        self._open_csv()
+        self._test_round += 1
+        self._log_based_test_round = False
         cfg = self._ui_config()
         self.status_label.setText(
             f"UL: iperf3 -c {cfg['bs_ip']} -t {cfg['duration']}"
@@ -180,9 +184,10 @@ class MainWindow(QMainWindow):
         self.iperf.start_ul(cfg["bs_ip"], cfg["port"], cfg["duration"], cfg["log_file"])
 
     def _start_dl(self) -> None:
-        self._open_csv()
         cfg = self._ui_config()
         if self.reverse_check.isChecked():
+            self._test_round += 1
+            self._log_based_test_round = False
             self.status_label.setText(
                 f"DL reverse: iperf3 -c {cfg['bs_ip']} -R -t {cfg['duration']}"
             )
@@ -190,6 +195,7 @@ class MainWindow(QMainWindow):
                 cfg["bs_ip"], cfg["port"], cfg["duration"], cfg["log_file"]
             )
         else:
+            self._log_based_test_round = True
             self.status_label.setText(
                 "DL server listening; run iperf3 -c <ue_ip> on the BS"
             )
@@ -197,7 +203,6 @@ class MainWindow(QMainWindow):
 
     def _stop_iperf(self) -> None:
         self.iperf.stop()
-        self._close_csv()
         self.status_label.setText("iperf3 stopped")
 
     def _restart_gui(self) -> None:
@@ -242,6 +247,11 @@ class MainWindow(QMainWindow):
 
         log_changed = self._iperf_log_changed()
         if log_changed:
+            if self._log_based_test_round:
+                now = time.monotonic()
+                if self._last_log_change_time is None or now - self._last_log_change_time > 1.0:
+                    self._test_round += 1
+                self._last_log_change_time = now
             self._save_channel(self._last_csi.get("channel"), stamp)
             self._write_csv(stamp)
 
@@ -297,7 +307,6 @@ class MainWindow(QMainWindow):
         self.log_view.appendPlainText(line)
 
     def _on_iperf_finished(self, msg: str) -> None:
-        self._close_csv()
         self.status_label.setText(msg)
 
     def _on_iperf_error(self, msg: str) -> None:
@@ -356,7 +365,6 @@ class MainWindow(QMainWindow):
 
     def _open_csv(self) -> None:
         self._close_csv()
-        self._test_round += 1
         ts = time.strftime("%Y%m%d_%H%M%S")
         record_dir = os.path.join(GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)

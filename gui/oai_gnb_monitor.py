@@ -92,8 +92,11 @@ class GnbMainWindow(QMainWindow):
         self._csv_path: Optional[str] = None
         self._srs_channel_dir: Optional[str] = None
         self._test_round = 0
+        self._log_based_test_round = False
+        self._last_log_change_time: Optional[float] = None
 
         self._build_ui()
+        self._open_csv()
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._refresh)
@@ -172,7 +175,7 @@ class GnbMainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _start_ul(self) -> None:
-        self._open_csv()
+        self._log_based_test_round = True
         cfg = self._ui_config()
         self.status_label.setText(
             f"UL server: iperf3 -s -p {cfg['port']} (UE runs iperf3 client)"
@@ -180,7 +183,8 @@ class GnbMainWindow(QMainWindow):
         self.iperf.start_ul_server(cfg["port"], cfg["log_file"])
 
     def _start_dl(self) -> None:
-        self._open_csv()
+        self._test_round += 1
+        self._log_based_test_round = False
         cfg = self._ui_config()
         self.status_label.setText(
             f"DL client: iperf3 -c {cfg['ue_ip']} -t {cfg['duration']} "
@@ -190,7 +194,6 @@ class GnbMainWindow(QMainWindow):
 
     def _stop_iperf(self) -> None:
         self.iperf.stop()
-        self._close_csv()
         self.status_label.setText("iperf3 stopped")
 
     def _restart_gui(self) -> None:
@@ -238,6 +241,11 @@ class GnbMainWindow(QMainWindow):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         log_changed = self._iperf_log_changed()
         if log_changed:
+            if self._log_based_test_round:
+                now = time.monotonic()
+                if self._last_log_change_time is None or now - self._last_log_change_time > 1.0:
+                    self._test_round += 1
+                self._last_log_change_time = now
             self._save_srs(self._last_srs.get("channel"), stamp)
             self._write_csv(stamp)
 
@@ -314,7 +322,6 @@ class GnbMainWindow(QMainWindow):
         pass
 
     def _on_iperf_finished(self, msg: str) -> None:
-        self._close_csv()
         self.status_label.setText(msg)
 
     def _on_iperf_error(self, msg: str) -> None:
@@ -372,7 +379,6 @@ class GnbMainWindow(QMainWindow):
 
     def _open_csv(self) -> None:
         self._close_csv()
-        self._test_round += 1
         ts = time.strftime("%Y%m%d_%H%M%S")
         record_dir = os.path.join(GNB_GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)

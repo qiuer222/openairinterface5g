@@ -56,7 +56,13 @@ gui/record/gui_gnb_log_<timestamp>.csv
 gui/record/gui_gnb_log_<timestamp>/srs_<timestamp>.npy
 ```
 
-Each CSV row includes `test_round` to identify the iperf test round.
+The CSV is created once when the GUI starts; one CSV file is used for the whole
+GUI run. `Stop`, `UL`, and `DL` do not create new files.
+
+Each CSV row includes `test_round` to identify the iperf test round. On the gNB
+DL client side, `test_round` increments every time DL is clicked. On the gNB UL
+server side, it increments when the iperf log resumes after an idle gap. The
+counter resets to zero when the GUI process restarts.
 
 iperf3 pairing:
 
