@@ -14,13 +14,34 @@ from gui.analysis.csi_parser import valid_subcarrier_indices
 
 
 NOISE_POWER_DEFAULT = 1.0
+C16_TO_FLOAT_SCALE = 1.0 / 32768.0
 
 
-def normalize_channel(h: np.ndarray, noise_power: float = NOISE_POWER_DEFAULT) -> np.ndarray:
-    """Return the channel unchanged while enforcing a float complex dtype."""
+def normalize_channel(
+    h: np.ndarray,
+    noise_power: float = NOISE_POWER_DEFAULT,
+    snr_db: float | None = None,
+) -> np.ndarray:
+    """Normalize a raw channel snapshot.
+
+    The stored channel originates from ``c16_t`` fixed-point samples, so it is
+    first rescaled from the 16-bit integer range to ``[-1, 1)`` by dividing by
+    32768. With ``snr_db=None`` the channel is returned after that rescaling,
+    enforcing a float complex dtype. With ``snr_db`` set, the channel is then
+    scaled so its mean power over valid CSI-RS subcarriers equals
+    ``noise_power * 10**(snr_db/10)``, removing absolute RX-gain scaling while
+    preserving channel shape.
+    """
     if noise_power <= 0:
         raise ValueError("noise_power must be positive")
-    return h.astype(np.complex128, copy=False)
+    h = h.astype(np.complex128, copy=False) * C16_TO_FLOAT_SCALE
+    if snr_db is None:
+        return h
+    target_power = float(noise_power) * 10.0 ** (float(snr_db) / 10.0)
+    power = raw_channel_power(h)
+    if not np.isfinite(power) or power <= 0:
+        return h
+    return h * np.sqrt(target_power / power)
 
 
 def raw_channel_power(

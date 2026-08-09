@@ -62,6 +62,7 @@ def write_final_report(
     stream_position: pd.DataFrame,
     validation_summary: dict,
     noise_power: float,
+    snr_db: float | None,
     top_ratio: float,
     pair_tolerance_ms: float,
 ) -> str:
@@ -74,12 +75,24 @@ def write_final_report(
         f"- Second-level samples: `{len(second_df)}`",
         f"- Position-level samples: `{len(position_df)}`",
         f"- Noise power: `{noise_power}`",
+        f"- Target SNR normalization: `{snr_db}` dB" if snr_db is not None
+        else "- Target SNR normalization: `off` (raw channel power kept)",
         f"- Retained throughput ratio per position: `{top_ratio:.0%}`",
         f"- UL gNB pairing tolerance: `{pair_tolerance_ms:.0f} ms`",
         "",
-        "The CSI channel is used in raw OAI `c16`/FFT units. Capacity metrics",
-        "therefore use the same raw channel power and a common fixed noise power;",
-        "RSRP is kept as an independent baseline predictor.",
+        *(
+            (
+                "Each channel was normalized so its mean power over valid CSI-RS",
+                "subcarriers equals the target SNR with the common fixed noise",
+                "power, removing absolute RX-gain scaling while preserving shape.",
+            )
+            if snr_db is not None
+            else (
+                "The CSI channel is used in raw OAI `c16`/FFT units. Capacity metrics",
+                "therefore use the same raw channel power and a common fixed noise power;",
+                "RSRP is kept as an independent baseline predictor.",
+            )
+        ),
         "",
         "## Validation",
         "",

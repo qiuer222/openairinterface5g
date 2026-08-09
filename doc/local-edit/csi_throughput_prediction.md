@@ -33,10 +33,18 @@ timestamp.
    Subcarriers with zero channel energy are excluded from all calculations.
 
 3. **Normalization and noise model**
-   `normalization.py` intentionally preserves raw OAI `c16`/FFT channel power.
-   All capacity metrics use the same configurable noise power, defaulting to
-   `1.0` because OAI uses `1` as its CSI-RS zero-noise fallback. RSRP is not
-   converted to SNR.
+   `normalization.py` rescales the stored channel from the `c16_t` 16-bit
+   fixed-point integer range to `[-1, 1)` by dividing by `32768` for every
+   sample. This rescale is applied for both normalization modes:
+
+   - **Raw mode (default):** after the `32768` rescale, the channel power is
+     kept as-is. All capacity metrics use the same configurable noise power,
+     defaulting to `1.0` because OAI uses `1` as its CSI-RS zero-noise
+     fallback. RSRP is not converted to SNR.
+   - **`--snr` mode:** each channel is additionally scaled so its mean power
+     over valid CSI-RS subcarriers equals `10^(snr/10)` (with the noise power
+     forced back to `1.0`), removing absolute RX-gain scaling while preserving
+     channel shape.
 
 4. **Feature extraction**
    `feature_extraction.py` aggregates singular values, eigenvalues, Frobenius
@@ -140,7 +148,22 @@ For a DL round, pass that round's folder and `--direction dl`:
 ```
 
 The UE CSV, its same-stem CSI directory, and the gNB CSV for UL rounds are
-expected inside the same round folder.
+expected inside the same round folder. Exactly one measurement round must be
+present per invocation.
+
+Optional `--snr` normalizes every channel to a target SNR in dB before the
+capacity calculations, removing RX-gain-dependent power variation:
+
+```bash
+.venv/bin/python gui/analysis/main.py \
+  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round1 \
+  --direction ul \
+  --snr 20 \
+  --output-dir gui/analysis/analysis_results
+```
+
+When `--snr` is given, the noise power is forced to `1.0`; when omitted, the
+raw (32768-rescaled) channel power is used.
 
 Plot time series directly from existing processed CSVs:
 
@@ -166,22 +189,34 @@ argument:
 
 ## Time-Series Plot Details
 
-The time-series figures are organized by direction. For each direction, the
-figures contain five subplots:
+Since each run analyzes exactly one round with a single direction, the
+time-series figures are a single column of five subplots (no left/right
+direction split). The second-level and position-level figures share the same
+subplot layout:
 
-1. Throughput and the actual scheduled layer count, using a left/right dual
-   axis. The layer series uses the UL layer from the gNB CSV or the layer
-   column from the UE CSV for DL.
-2. RSRP with its Pearson correlation to throughput shown on the left and the
+1. Throughput. For the second-level figure this subplot additionally shows the
+   actual scheduled layer count on a right-hand dual axis.
+2. RSRP with its Pearson correlation labeled `r = xx` on the left and the
    legend on the right.
-3. Shannon capacity with its Pearson correlation shown on the left and the
-   legend on the right.
-4. SVD capacity and SVD selected stream count, using a dual axis.
-5. ZF capacity and ZF selected stream count, using a dual axis.
+3. Shannon capacity with its Pearson correlation labeled `r = xx`.
+4. SVD capacity. For the second-level figure, the SVD selected stream count is
+   shown on a right-hand dual axis.
+5. ZF capacity. For the second-level figure, the ZF selected stream count is
+   shown on a right-hand dual axis.
 
-Capacity and throughput lines use line width 1; layer/stream-count lines use
-line width 0.5. Every metric has a distinct line color, and position-level
-plots additionally use a distinct marker per metric.
+The second-level figure uses real timestamps as the x-axis (rendered as a
+sample index), while the position-level figure uses `position_id`.
+
+The second-level figure uses line width 1 for capacity/throughput and 0.5 for
+layer/stream-count series. The position-level figure draws only the metric
+lines with a bolder line width (2.5) and no layer/stream-count series; each
+metric has a distinct color and marker.
+
+For the position-level figure, the max-RSRP and max-Shannon-capacity positions
+are marked with vertical dotted lines across the subplots. In the throughput
+subplot, dots annotate the throughput value at each of those positions, and the
+max-capacity position also shows the percentage enhancement of its throughput
+relative to the max-RSRP position.
 
 When `--csv` points to one processed CSV, the script splits the data by `set`
 and writes one figure per round. When it is omitted, the script combines the
@@ -201,4 +236,5 @@ The default output directory is `gui/analysis/analysis_results/` and includes:
 - `figures/scatter_*.png`
 - `final_report.md`
 
-The generated result directory is ignored by Git.
+Since one round is analyzed per run, output files use plain names without a
+per-round suffix. The generated result directory is ignored by Git.

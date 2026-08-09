@@ -22,6 +22,7 @@ from gui.analysis.data_loader import (
     load_measurement_frame,
 )
 from gui.analysis.main import aggregate_position_level
+from gui.analysis.normalization import raw_channel_power
 
 
 def _diagonal_channel() -> np.ndarray:
@@ -46,6 +47,30 @@ class AnalysisFrameworkTests(unittest.TestCase):
         eigenvalues = np.linalg.eigvalsh(hk @ hk.conj().T)[::-1]
         frobenius = np.sum(np.abs(hk) ** 2)
         self.assertTrue(np.isclose(frobenius, np.sum(eigenvalues)))
+
+    def test_snr_normalization_scales_mean_power_to_target(self):
+        from gui.analysis.normalization import normalize_channel
+
+        h = _diagonal_channel()
+        snr_db = 20.0
+        normalized = normalize_channel(h, noise_power=1.0, snr_db=snr_db)
+        target_power = 10.0 ** (snr_db / 10.0)
+        self.assertTrue(
+            np.isclose(
+                raw_channel_power(normalized),
+                target_power,
+            )
+        )
+
+    def test_no_snr_normalization_applies_c16_scale(self):
+        from gui.analysis.normalization import normalize_channel
+
+        h = _diagonal_channel()
+        normalized = normalize_channel(h, noise_power=1.0)
+        self.assertTrue(
+            np.isclose(raw_channel_power(normalized), raw_channel_power(h) / 32768.0**2)
+        )
+        self.assertEqual(normalized.dtype, np.complex128)
 
     def test_svd_capacity_matches_closed_form(self):
         h = _diagonal_channel()

@@ -31,7 +31,7 @@ from gui.analysis.data_loader import (
     parse_timestamp,
 )
 from gui.analysis.feature_extraction import extract_channel_features
-from gui.analysis.normalization import NOISE_POWER_DEFAULT, raw_channel_power
+from gui.analysis.normalization import NOISE_POWER_DEFAULT, normalize_channel, raw_channel_power
 from gui.analysis.report import write_final_report
 from gui.analysis.stream_selection import (
     select_optimal_stream,
@@ -117,6 +117,7 @@ def process_measurements(
     df: pd.DataFrame,
     noise_power: float,
     max_streams: int = 4,
+    snr_db: float | None = None,
 ) -> pd.DataFrame:
     """Build second-level rows with features, capacities, and validation data."""
     rows: List[dict] = []
@@ -148,6 +149,7 @@ def process_measurements(
             h, valid = load_channel_and_valid(csi_file)
             if len(valid) == 0:
                 raise ValueError("no valid CSI subcarriers")
+            h = normalize_channel(h, noise_power=noise_power, snr_db=snr_db)
 
             eigenvalue_rows = []
             svd_rows = []
@@ -470,6 +472,14 @@ def main() -> None:
         help="analysis direction for this round: ul or dl",
     )
     parser.add_argument("--noise-power", type=float, default=NOISE_POWER_DEFAULT)
+    parser.add_argument(
+        "--snr",
+        type=float,
+        default=None,
+        help="target SNR in dB to normalize each channel's mean power to; "
+        "when set, noise power is forced to the default (1.0) and the "
+        "channel is scaled to 10^(snr/10) so absolute RX gain is removed",
+    )
     parser.add_argument("--top-ratio", type=float, default=0.5)
     parser.add_argument("--pair-tolerance-ms", type=float, default=2000.0)
     parser.add_argument("--csi-tolerance-ms", type=float, default=200.0)
@@ -482,6 +492,10 @@ def main() -> None:
         raise SystemExit("--top-ratio must be in (0, 1]")
     if args.noise_power <= 0:
         raise SystemExit("--noise-power must be positive")
+    snr_db = args.snr
+    noise_power = args.noise_power
+    if snr_db is not None:
+        noise_power = NOISE_POWER_DEFAULT
 
     measurements = discover_measurement_sets(args.dataset_dir)
     if not measurements:
@@ -495,68 +509,49 @@ def main() -> None:
 
     output_dir = os.path.abspath(args.output_dir)
     os.makedirs(output_dir, exist_ok=True)
-    all_second: List[pd.DataFrame] = []
-    all_validation: List[pd.DataFrame] = []
     logs: List[str] = []
 
-    for ms in measurements:
-        direction = args.direction
-        frame = load_measurement_frame(
-            ms,
-            direction,
-            pair_tolerance_ms=args.pair_tolerance_ms,
-            position_gap_s=args.position_gap_s,
+    ms = measurements[0]
+    direction = args.direction
+    frame = load_measurement_frame(
+        ms,
+        direction,
+        pair_tolerance_ms=args.pair_tolerance_ms,
+        position_gap_s=args.position_gap_s,
+    )
+    csi_map = _load_csi_map(ms.ue_csi_dir)
+    frame, csi_warnings = _match_csi(frame, csi_map, args.csi_tolerance_ms)
+    matched = int(frame["csi_file"].notna().sum())
+    if direction == "dl":
+        logs.append(
+            f"{ms.name}: UE rows={len(frame)}, CSI matched={matched}/{len(frame)}, "
+            f"CSI files={len(csi_map)} (DL uses UE CSV directly)"
         )
-        csi_map = _load_csi_map(ms.ue_csi_dir)
-        frame, csi_warnings = _match_csi(frame, csi_map, args.csi_tolerance_ms)
-        matched = int(frame["csi_file"].notna().sum())
-        if direction == "dl":
-            logs.append(
-                f"{ms.name}: UE rows={len(frame)}, CSI matched={matched}/{len(frame)}, "
-                f"CSI files={len(csi_map)} (DL uses UE CSV directly)"
-            )
-        else:
-            logs.append(
-                f"{ms.name}: UE rows={len(frame)}, gNB paired="
-                f"{int(frame['gnb_match_delta_ms'].notna().sum())}, "
-                f"CSI matched={matched}/{len(frame)}, CSI files={len(csi_map)}"
-            )
-        if csi_warnings:
-            logs.extend(f"  {item}" for item in csi_warnings[:20])
-        frame = frame[frame["csi_file"].notna()].copy()
-        if frame.empty:
-            logs.append(f"{ms.name}: no CSI-matched rows, skipping")
-            continue
+    else:
+        logs.append(
+            f"{ms.name}: UE rows={len(frame)}, gNB paired="
+            f"{int(frame['gnb_match_delta_ms'].notna().sum())}, "
+            f"CSI matched={matched}/{len(frame)}, CSI files={len(csi_map)}"
+        )
+    if csi_warnings:
+        logs.extend(f"  {item}" for item in csi_warnings[:20])
+    frame = frame[frame["csi_file"].notna()].copy()
+    if frame.empty:
+        raise SystemExit(f"{ms.name}: no CSI-matched rows")
 
-        second, validation = process_measurements(
-            frame,
-            noise_power=args.noise_power,
-            max_streams=4,
-        )
-        _write_dataframe(
-            output_dir,
-            f"processed_second_level_{ms.name}.csv",
-            second,
-        )
-        _write_dataframe(
-            output_dir,
-            f"validation_report_{ms.name}.csv",
-            validation,
-        )
-        all_second.append(second)
-        all_validation.append(validation)
-
-    if not all_second:
-        raise SystemExit("no processed rows were generated")
-
-    second_df = pd.concat(all_second, ignore_index=True)
-    validation_df = pd.concat(all_validation, ignore_index=True)
+    second_df, validation_df = process_measurements(
+        frame,
+        noise_power=noise_power,
+        max_streams=4,
+        snr_db=snr_db,
+    )
+    _write_dataframe(output_dir, "processed_second_level.csv", second_df)
+    _write_dataframe(output_dir, "validation_report.csv", validation_df)
     validation_summary = _write_validation(
         output_dir,
         validation_df,
         args.validation_tolerance,
     )
-    _write_dataframe(output_dir, "processed_second_level.csv", second_df)
 
     if validation_summary["result"] != "PASS":
         with open(os.path.join(output_dir, "analysis_log.txt"), "w", encoding="utf-8") as f:
@@ -607,7 +602,8 @@ def main() -> None:
         stream_second=stream_second,
         stream_position=stream_position,
         validation_summary=validation_summary,
-        noise_power=args.noise_power,
+        noise_power=noise_power,
+        snr_db=snr_db,
         top_ratio=args.top_ratio,
         pair_tolerance_ms=args.pair_tolerance_ms,
     )
@@ -617,7 +613,7 @@ def main() -> None:
         f.write("\n")
 
     print("Processing complete")
-    print(f"sets: {[ms.name for ms in measurements]}")
+    print(f"set: {ms.name} ({direction.upper()})")
     print(f"second-level rows: {len(second_df)}")
     print(f"position-level rows: {len(position_df)}")
     print(f"validation: {validation_summary['result']}")

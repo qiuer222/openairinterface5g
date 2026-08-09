@@ -48,6 +48,14 @@ python gui/analysis/plot_timeseries.py --csv gui/analysis/analysis_results/proce
 
 - `--noise-power`: common fixed noise power, default `1.0` matching OAI's
   CSI-RS zero-noise fallback.
+- `--snr`: optional target SNR in dB. When set, each channel is scaled so its
+  mean power over valid CSI-RS subcarriers equals `10^(snr/10)` and the noise
+  power is forced to `1.0`, removing absolute RX-gain scaling while preserving
+  channel shape. When unset, the raw channel power is kept as-is.
+
+The stored channel originates from `c16_t` fixed-point samples. Both modes
+divide the channel by `32768` first, converting the 16-bit integer range to
+`[-1, 1)`.
 - `--top-ratio`: retained highest-throughput fraction per position, default
   `0.5`.
 - `--pair-tolerance-ms`: UL gNB/UE timestamp pairing tolerance, default `2000`.

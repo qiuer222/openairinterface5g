@@ -76,11 +76,7 @@ def _fit_line(x, y):
 
 def _series_x(group: pd.DataFrame, x_column: str) -> pd.Series:
     if x_column == "timestamp":
-        return pd.to_datetime(
-            group["timestamp"],
-            format="%Y%m%d_%H%M%S_%f",
-            errors="coerce",
-        )
+        return pd.Series(np.arange(len(group)), index=group.index)
     return pd.to_numeric(group[x_column], errors="coerce")
 
 
@@ -100,8 +96,8 @@ def _metric_label(metric: str) -> str:
     return METRIC_NAMES.get(metric, metric)
 
 
-def _add_correlation_label(ax, label: str, r: float) -> None:
-    text = f"{label} r = {r:.2f}" if np.isfinite(r) else f"{label} r = n/a"
+def _add_correlation_label(ax, r: float) -> None:
+    text = f"r = {r:.2f}" if np.isfinite(r) else "r = n/a"
     ax.text(
         0.02,
         0.95,
@@ -328,94 +324,170 @@ def _plot_timeseries_mode(
     ]
     fig, axes = plt.subplots(
         len(panels),
-        len(directions),
-        figsize=(7 * max(len(directions), 1), 16),
-        sharex="col",
+        1,
+        figsize=(10, 16),
+        sharex=True,
         squeeze=False,
     )
 
-    for col_idx, direction in enumerate(directions):
-        sub = df[df["direction"] == direction]
-        for row_idx, (metric, secondary_metric, ylabel, secondary_ylabel) in enumerate(panels):
-            ax = axes[row_idx][col_idx]
-            if sub.empty:
-                ax.text(
-                    0.5,
-                    0.5,
-                    f"No {direction.upper()} samples",
-                    transform=ax.transAxes,
-                    ha="center",
-                    va="center",
+    is_position = x_column == "position_id"
+    primary_lw = 2.5 if is_position else 1.0
+
+    for row_idx, (metric, secondary_metric, ylabel, secondary_ylabel) in enumerate(panels):
+        ax = axes[row_idx][0]
+        sub = df[df["direction"].isin(directions)]
+        if sub.empty:
+            ax.text(
+                0.5,
+                0.5,
+                f"No {'/'.join(d.upper() for d in directions)} samples",
+                transform=ax.transAxes,
+                ha="center",
+                va="center",
+            )
+            ax.set_axis_off()
+            continue
+
+        show_secondary = secondary_metric is not None and not is_position
+        ax2 = None
+        if show_secondary:
+            ax2 = ax.twinx()
+
+        for set_name, group in sub.groupby("set", sort=True):
+            group = group.sort_values(x_column)
+            x = _series_x(group, x_column)
+
+            if metric in group.columns:
+                values = pd.to_numeric(group[metric], errors="coerce")
+                ax.plot(
+                    x,
+                    values,
+                    label=f"{set_name} {_metric_label(metric)}",
+                    **_series_kwargs(metric, x_column, primary_lw),
                 )
-                ax.set_axis_off()
-                continue
 
-            ax2 = None
-            if secondary_metric:
-                ax2 = ax.twinx()
+            if ax2 is not None and secondary_metric in group.columns:
+                values = pd.to_numeric(group[secondary_metric], errors="coerce")
+                ax2.plot(
+                    x,
+                    values,
+                    label=f"{set_name} {_metric_label(secondary_metric)}",
+                    **_series_kwargs(secondary_metric, x_column, 0.5),
+                )
 
+        ax.set_ylabel(ylabel)
+        ax.grid(alpha=0.3)
+
+        if is_position:
             for set_name, group in sub.groupby("set", sort=True):
                 group = group.sort_values(x_column)
                 x = _series_x(group, x_column)
+                throughput = pd.to_numeric(group.get("throughput_mbps"), errors="coerce")
 
-                if metric in group.columns:
-                    values = pd.to_numeric(group[metric], errors="coerce")
-                    ax.plot(
-                        x,
-                        values,
-                        label=f"{set_name} {_metric_label(metric)}",
-                        **_series_kwargs(metric, x_column, 1.0),
-                    )
+                rsrp = pd.to_numeric(group.get("rsrp_dBm"), errors="coerce")
+                rsrp_valid = rsrp.dropna()
+                if not rsrp_valid.empty:
+                    max_rsrp_idx = rsrp_valid.idxmax()
+                    max_rsrp_pos = float(x.loc[max_rsrp_idx])
+                    if row_idx in (0, 1):
+                        ax.axvline(
+                            max_rsrp_pos,
+                            linestyle=":",
+                            color=METRIC_COLORS["rsrp_dBm"],
+                            alpha=0.8,
+                        )
+                    if row_idx == 0:
+                        throughput_at_rsrp = float(throughput.loc[max_rsrp_idx])
+                        ax.plot(
+                            [max_rsrp_pos],
+                            [throughput_at_rsrp],
+                            marker="o",
+                            markersize=7,
+                            color=METRIC_COLORS["rsrp_dBm"],
+                            linestyle="none",
+                            zorder=5,
+                        )
+                        ax.annotate(
+                            f"{throughput_at_rsrp:.1f}",
+                            (max_rsrp_pos, throughput_at_rsrp),
+                            textcoords="offset points",
+                            xytext=(0, 8),
+                            ha="center",
+                            fontsize=8,
+                            color=METRIC_COLORS["rsrp_dBm"],
+                        )
 
-                if ax2 is not None and secondary_metric in group.columns:
-                    values = pd.to_numeric(group[secondary_metric], errors="coerce")
-                    ax2.plot(
-                        x,
-                        values,
-                        label=f"{set_name} {_metric_label(secondary_metric)}",
-                        **_series_kwargs(secondary_metric, x_column, 0.5),
-                    )
+                capacity = pd.to_numeric(group.get("shannon_capacity"), errors="coerce")
+                capacity_valid = capacity.dropna()
+                if not capacity_valid.empty:
+                    max_cap_idx = capacity_valid.idxmax()
+                    max_cap_pos = float(x.loc[max_cap_idx])
+                    if row_idx in (0, 2):
+                        ax.axvline(
+                            max_cap_pos,
+                            linestyle=":",
+                            color=METRIC_COLORS["shannon_capacity"],
+                            alpha=0.8,
+                        )
+                    if row_idx == 0:
+                        throughput_at_cap = float(throughput.loc[max_cap_idx])
+                        ax.plot(
+                            [max_cap_pos],
+                            [throughput_at_cap],
+                            marker="o",
+                            markersize=7,
+                            color=METRIC_COLORS["shannon_capacity"],
+                            linestyle="none",
+                            zorder=5,
+                        )
+                        if (
+                            not rsrp_valid.empty
+                            and float(throughput.loc[max_rsrp_idx]) > 0
+                        ):
+                            enhancement = (
+                                (throughput_at_cap - float(throughput.loc[max_rsrp_idx]))
+                                / float(throughput.loc[max_rsrp_idx])
+                                * 100.0
+                            )
+                            ax.annotate(
+                                f"{throughput_at_cap:.1f} (+{enhancement:.1f}%)",
+                                (max_cap_pos, throughput_at_cap),
+                                textcoords="offset points",
+                                xytext=(0, -12),
+                                ha="center",
+                                fontsize=8,
+                                color=METRIC_COLORS["shannon_capacity"],
+                            )
 
-            ax.set_ylabel(ylabel)
-            ax.grid(alpha=0.3)
-            ax.set_title(direction.upper()) if row_idx == 0 else None
+        if ax2 is not None:
+            ax2.set_ylabel(secondary_ylabel)
+            ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
 
-            if ax2 is not None:
-                ax2.set_ylabel(secondary_ylabel)
-                ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
+        if row_idx in (1, 2, 3, 4):
+            r = safe_pearson(
+                pd.to_numeric(sub[metric], errors="coerce"),
+                pd.to_numeric(sub["throughput_mbps"], errors="coerce"),
+            )
+            _add_correlation_label(ax, r)
 
-            correlation_labels = {
-                1: "RSRP",
-                2: "Shannon capacity",
-                3: "SVD capacity",
-                4: "ZF capacity",
-            }
-            if row_idx in correlation_labels:
-                r = safe_pearson(
-                    pd.to_numeric(sub[metric], errors="coerce"),
-                    pd.to_numeric(sub["throughput_mbps"], errors="coerce"),
-                )
-                _add_correlation_label(ax, correlation_labels[row_idx], r)
+        if ax2 is not None:
+            handles1, labels1 = ax.get_legend_handles_labels()
+            handles2, labels2 = ax2.get_legend_handles_labels()
+            ax.legend(
+                handles1 + handles2,
+                labels1 + labels2,
+                loc="upper right",
+                fontsize=7,
+            )
+        else:
+            ax.legend(loc="upper right", fontsize=7)
 
-            if ax2 is not None:
-                handles1, labels1 = ax.get_legend_handles_labels()
-                handles2, labels2 = ax2.get_legend_handles_labels()
-                ax.legend(
-                    handles1 + handles2,
-                    labels1 + labels2,
-                    loc="upper right",
-                    fontsize=7,
-                )
-            else:
-                ax.legend(loc="upper right", fontsize=7)
-
-        axes[-1][col_idx].set_xlabel(
-            "Time" if x_column == "timestamp" else "Position ID"
-        )
+    axes[-1][0].set_xlabel(
+        "Sample index" if x_column == "timestamp" else "Position ID"
+    )
 
     fig.suptitle(title, fontsize=14)
     fig.tight_layout()
-    fig.autofmt_xdate()
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
     return output_path
