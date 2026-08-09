@@ -39,6 +39,8 @@ CMakeUserPresets.json
 gui/record
 gui/channel_record
 gui/*_results
+gui/analysis/analysis_results/
+analysis_results
 
 # Python
 *.venv

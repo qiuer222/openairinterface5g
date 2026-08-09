@@ -1,49 +1,64 @@
-# OAI GUI Output Analysis
+# CSI-Based Throughput Prediction Framework
 
-Run from the repository root:
+This package analyzes OAI CSI-RS channel snapshots together with UE/gNB GUI
+measurement CSVs. It computes Shannon, SVD-precoding, and ZF+MMSE capacities
+from the raw OAI channel, keeps RSRP as an independent baseline, and evaluates
+which CSI-derived metric best predicts measured throughput.
 
-```bash
-python gui/analysis/analyze_correlation.py \
-  --csv gui/record/gui_ue_log_20260802_223124.csv \
-  --csi gui/record/gui_ue_log_20260802_223124 \
-  --snr 10 \
-  --output-dir analysis_results
-```
+## Run
 
-The CSI directory is usually the CSV filename without the `.csv` extension.
-If only `--csv` is given, the script derives `--csi` from it automatically.
-If only `--csi` is given, the script derives the CSV path by appending `.csv`.
-Without either option, the script auto-selects the latest complete
-`gui/record/gui_ue_log_*.csv` and its matching CSI directory.
-
-Required dependencies are listed in `gui/analysis/requirements.txt`.
-
-## channel_analysis.py
-
-The current task pipeline is implemented in `channel_analysis.py`:
+The CLI processes one test round per invocation. Point `--dataset-dir` at the
+round folder and pass one `--direction` value:
 
 ```bash
-.venv/bin/python gui/analysis/channel_analysis.py \
-  --csv gui/record/gui_ue_log_20260804_212102.csv \
-  --output-dir gui/channel_analysis_results
+python gui/analysis/main.py \
+  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round1 \
+  --direction ul \
+  --output-dir gui/analysis/analysis_results
 ```
 
-If `--csi` is omitted, it is derived from the CSV stem (same-name CSI folder).
-The default output directory is `gui/channel_analysis_results`.
+```bash
+python gui/analysis/main.py \
+  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round2 \
+  --direction dl \
+  --output-dir gui/analysis/analysis_results
+```
 
-Outputs:
+For a UL round, the UE CSV, the same-stem CSI directory, and the gNB CSV are
+expected inside the same round folder.
 
-- `cleaned_measurement.csv`
-- `cleaning_log.txt`
-- `csi_matching_log.txt`
-- `channel_analysis.csv`
-- `validation_report.csv`
-- `validation_summary.txt`
-- `analysis_summary.txt`
-- `analysis_summary.md`
-- `figures/channel_analysis_<csv_stem>.png`, where `<csv_stem>` is the source CSV filename without `.csv`
-- `figures/channel_analysis_position_means_<csv_stem>.png`, with one point per position
+To regenerate the time-series figures directly from existing processed CSVs
+without rerunning the data-processing pipeline:
 
-The summary reports per-position metric means and correlations between each
-position's top-50% throughput mean and the position's mean channel/radio
-metric.
+```bash
+python gui/analysis/plot_timeseries.py \
+  --second-level gui/analysis/analysis_results/processed_second_level.csv \
+  --position-level gui/analysis/analysis_results/processed_position_level.csv \
+  --output-dir gui/analysis/analysis_results
+```
+
+To plot one processed CSV at a time and split it into per-round figures:
+
+```bash
+python gui/analysis/plot_timeseries.py --csv gui/analysis/analysis_results/processed_second_level.csv
+python gui/analysis/plot_timeseries.py --csv gui/analysis/analysis_results/processed_position_level.csv
+```
+
+## Key Options
+
+- `--noise-power`: common fixed noise power, default `1.0` matching OAI's
+  CSI-RS zero-noise fallback.
+- `--top-ratio`: retained highest-throughput fraction per position, default
+  `0.5`.
+- `--pair-tolerance-ms`: UL gNB/UE timestamp pairing tolerance, default `2000`.
+- `--csi-tolerance-ms`: CSI timestamp matching tolerance, default `200`.
+- `--position-gap-s`: timestamp-gap segmentation threshold used when the CSV
+  does not have a multi-value `test_round` column.
+- `--direction`: required per-call direction, either `ul` or `dl`.
+
+## Outputs
+
+The pipeline writes processed second-level and position-level CSVs, validation
+reports, correlation and regression tables, stream-selection summaries and
+confusion matrices, publication figures, and a Markdown final report under the
+configured output directory.
