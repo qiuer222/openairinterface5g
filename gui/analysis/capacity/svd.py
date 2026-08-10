@@ -9,6 +9,31 @@ import numpy as np
 from gui.analysis.csi_parser import valid_subcarrier_indices
 
 
+def svd_capacities_from_eigenvalue_matrix(
+    eigenvalue_matrix: np.ndarray,
+    noise_power: float = 1.0,
+    max_streams: int | None = None,
+) -> List[float]:
+    """Return average SVD capacity for K = 1..max_streams from an ``(N, rank)`` matrix."""
+    arr = np.asarray(eigenvalue_matrix, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] == 0:
+        return []
+    if noise_power <= 0:
+        raise ValueError("noise_power must be positive")
+    if max_streams is None:
+        max_streams = arr.shape[1]
+    max_streams = min(max_streams, arr.shape[1])
+
+    capacities: List[float] = []
+    for k in range(1, max_streams + 1):
+        per_subcarrier = np.sum(
+            np.log2(1.0 + np.maximum(arr[:, :k], 0.0) / (float(k) * float(noise_power))),
+            axis=1,
+        )
+        capacities.append(float(np.mean(per_subcarrier)))
+    return capacities
+
+
 def svd_capacities_from_eigenvalues(
     eigenvalues_by_subcarrier: Sequence[np.ndarray],
     noise_power: float = 1.0,

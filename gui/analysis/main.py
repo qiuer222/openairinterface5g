@@ -20,9 +20,9 @@ if __package__ in (None, ""):
 from gui.analysis.analysis.correlation import correlation_table
 from gui.analysis.analysis.regression import regression_table
 from gui.analysis.analysis.visualization import plot_all
-from gui.analysis.capacity.shannon import shannon_capacity_from_eigenvalues
-from gui.analysis.capacity.svd import svd_capacities_from_eigenvalues
-from gui.analysis.capacity.zf_mmse import aggregate_zf_mmse_from_svd
+from gui.analysis.capacity.shannon import shannon_capacity_from_eigenvalue_matrix
+from gui.analysis.capacity.svd import svd_capacities_from_eigenvalue_matrix
+from gui.analysis.capacity.zf_mmse import aggregate_zf_mmse_from_svd_batched
 from gui.analysis.csi_parser import load_channel_and_valid
 from gui.analysis.data_loader import (
     MeasurementSet,
@@ -30,8 +30,10 @@ from gui.analysis.data_loader import (
     load_measurement_frame,
     parse_timestamp,
 )
-from gui.analysis.feature_extraction import extract_channel_features
-from gui.analysis.normalization import NOISE_POWER_DEFAULT, normalize_channel, raw_channel_power
+from gui.analysis.feature_extraction import (
+    extract_channel_features_from_singular_values,
+)
+from gui.analysis.normalization import NOISE_POWER_DEFAULT, normalize_channel
 from gui.analysis.report import write_final_report
 from gui.analysis.stream_selection import (
     select_optimal_stream,
@@ -113,6 +115,74 @@ def _optimal_from_capacities(capacities: List[float]) -> int:
     return int(np.nanargmax(values) + 1)
 
 
+def _channel_metrics(
+    h: np.ndarray,
+    valid: np.ndarray,
+    noise_power: float,
+    max_streams: int,
+    snr_db: float | None,
+) -> dict:
+    """Compute all metrics for one channel using batched SVD over subcarriers."""
+    if len(valid) == 0:
+        raise ValueError("no valid CSI subcarriers")
+    h = normalize_channel(h, noise_power=noise_power, snr_db=snr_db)
+    hv = h[:, :, valid].transpose(2, 0, 1)
+    u, s, vh = np.linalg.svd(hv, full_matrices=False)
+    eig = s ** 2
+    rank = eig.shape[1]
+
+    frobenius2 = np.sum(np.abs(hv) ** 2, axis=(1, 2))
+    eigenvalue_sum = np.sum(eig, axis=1)
+    max_power_rel = float(
+        np.max(np.abs(frobenius2 - eigenvalue_sum) / np.maximum(frobenius2, EPS))
+    )
+    raw_power = float(np.mean(frobenius2))
+
+    svd_capacities = svd_capacities_from_eigenvalue_matrix(
+        eig, noise_power=noise_power, max_streams=max_streams
+    )
+    max_svd_rel = 0.0
+    for kk in range(1, rank + 1):
+        cap_eig = np.sum(
+            np.log2(
+                1.0
+                + np.maximum(eig[:, :kk], 0.0) / (float(kk) * float(noise_power))
+            ),
+            axis=1,
+        )
+        cap_sv = np.sum(
+            np.log2(
+                1.0
+                + np.maximum(s[:, :kk] ** 2, 0.0) / (float(kk) * float(noise_power))
+            ),
+            axis=1,
+        )
+        rel = np.abs(cap_eig - cap_sv) / np.maximum(np.abs(cap_eig), EPS)
+        max_svd_rel = max(max_svd_rel, float(np.max(rel)))
+
+    shannon = shannon_capacity_from_eigenvalue_matrix(
+        eig, noise_power=noise_power, tx_count=h.shape[1]
+    )
+    zf = aggregate_zf_mmse_from_svd_batched(
+        u, s, vh, noise_power=noise_power, max_streams=max_streams
+    )
+    features = extract_channel_features_from_singular_values(
+        s, valid_subcarrier_count=len(valid)
+    )
+    return {
+        "features": features,
+        "shannon": shannon,
+        "svd_capacities": svd_capacities,
+        "zf_capacities": zf["capacities"],
+        "sinr_matrix": zf["sinr_matrix"],
+        "max_power_rel": max_power_rel,
+        "max_svd_rel": max_svd_rel,
+        "max_zf_trace_relative_error": zf["max_trace_relative_error"],
+        "max_sinr_negative_error": zf["max_sinr_negative_error"],
+        "raw_power": raw_power,
+    }
+
+
 def process_measurements(
     df: pd.DataFrame,
     noise_power: float,
@@ -149,72 +219,19 @@ def process_measurements(
             h, valid = load_channel_and_valid(csi_file)
             if len(valid) == 0:
                 raise ValueError("no valid CSI subcarriers")
-            h = normalize_channel(h, noise_power=noise_power, snr_db=snr_db)
-
-            eigenvalue_rows = []
-            svd_rows = []
-            max_power_rel = 0.0
-            max_svd_rel = 0.0
-            raw_power_sum = 0.0
-            for k in valid:
-                hk = h[:, :, k]
-                u, s, vh = np.linalg.svd(hk, full_matrices=False)
-                eigenvalues = s ** 2
-                eigenvalue_rows.append(eigenvalues)
-                svd_rows.append((u, s, vh))
-                frobenius2 = float(np.sum(np.abs(hk) ** 2))
-                eigenvalue_sum = float(np.sum(eigenvalues))
-                max_power_rel = max(
-                    max_power_rel,
-                    abs(frobenius2 - eigenvalue_sum) / max(frobenius2, EPS),
-                )
-                raw_power_sum += frobenius2
-
-                for kk in range(1, len(eigenvalues) + 1):
-                    cap_eig = float(
-                        np.sum(
-                            np.log2(
-                                1.0
-                                + np.maximum(eigenvalues[:kk], 0.0)
-                                / (float(kk) * float(noise_power))
-                            )
-                        )
-                    )
-                    cap_sv = float(
-                        np.sum(
-                            np.log2(
-                                1.0
-                                + np.maximum(s[:kk] ** 2, 0.0)
-                                / (float(kk) * float(noise_power))
-                            )
-                        )
-                    )
-                    denominator = max(abs(cap_eig), EPS)
-                    max_svd_rel = max(
-                        max_svd_rel, abs(cap_eig - cap_sv) / denominator
-                    )
-
-            features = extract_channel_features(
-                [s for _u, s, _vh in svd_rows],
-                valid_subcarrier_count=len(valid),
-            )
-            shannon = shannon_capacity_from_eigenvalues(
-                eigenvalue_rows,
-                noise_power=noise_power,
-                tx_count=h.shape[1],
-            )
-            svd_capacities = svd_capacities_from_eigenvalues(
-                eigenvalue_rows,
+            metrics = _channel_metrics(
+                h,
+                valid,
                 noise_power=noise_power,
                 max_streams=max_streams,
-            )
-            zf = aggregate_zf_mmse_from_svd(
-                svd_rows,
-                noise_power=noise_power,
-                max_streams=max_streams,
+                snr_db=snr_db,
             )
 
-            raw_power = raw_power_sum / len(valid)
+            features = metrics["features"]
+            svd_capacities = metrics["svd_capacities"]
+            zf_capacities = metrics["zf_capacities"]
+            raw_power = metrics["raw_power"]
+            sinr_matrix = metrics["sinr_matrix"]
             row.update(features)
             row.update(
                 {
@@ -224,7 +241,7 @@ def process_measurements(
                         if raw_power > 0
                         else float("nan")
                     ),
-                    "shannon_capacity": shannon,
+                    "shannon_capacity": metrics["shannon"],
                     "svd_capacity": float("nan"),
                     "svd_optimal_stream": 0,
                     "zf_capacity": float("nan"),
@@ -237,7 +254,6 @@ def process_measurements(
                 key = f"svd_capacity_k{idx + 1}"
                 if key not in row:
                     row[key] = float("nan")
-            zf_capacities = zf["capacities"]
             for idx, capacity in enumerate(zf_capacities):
                 row[f"zf_capacity_k{idx + 1}"] = capacity
             for idx in range(max_streams):
@@ -253,13 +269,13 @@ def process_measurements(
                 row["zf_capacity"] = row[f"zf_capacity_k{row['zf_optimal_stream']}"]
 
             for k in range(1, max_streams + 1):
-                sinrs = zf["sinr_matrix"][k - 1, :k]
+                sinrs = sinr_matrix[k - 1, :k]
                 row[f"sinr_k{k}_mean"] = float(np.nanmean(sinrs)) if np.any(np.isfinite(sinrs)) else float("nan")
             for stream in range(1, max_streams + 1):
                 row[f"sinr_optimal_stream{stream}"] = float("nan")
             if row["zf_optimal_stream"] > 0:
                 k = row["zf_optimal_stream"]
-                sinrs = zf["sinr_matrix"][k - 1, :]
+                sinrs = sinr_matrix[k - 1, :]
                 for stream in range(1, max_streams + 1):
                     if np.isfinite(sinrs[stream - 1]):
                         row[f"sinr_optimal_stream{stream}"] = float(sinrs[stream - 1])
@@ -267,13 +283,13 @@ def process_measurements(
             val.update(
                 {
                     "validated_subcarriers": int(len(valid)),
-                    "max_power_relative_error": max_power_rel,
-                    "max_svd_relative_error": max_svd_rel,
+                    "max_power_relative_error": metrics["max_power_rel"],
+                    "max_svd_relative_error": metrics["max_svd_rel"],
                     "max_zf_trace_relative_error": float(
-                        zf["max_trace_relative_error"]
+                        metrics["max_zf_trace_relative_error"]
                     ),
                     "max_sinr_negative_error": float(
-                        zf["max_sinr_negative_error"]
+                        metrics["max_sinr_negative_error"]
                     ),
                     "raw_channel_power": raw_power,
                     "eigenvalue_sum": features["eigenvalue_sum"],

@@ -55,6 +55,91 @@ def zf_mmse_subcarrier_from_svd(
     return capacity, padded, trace_w
 
 
+def aggregate_zf_mmse_from_svd_batched(
+    u: np.ndarray,
+    s: np.ndarray,
+    vh: np.ndarray,
+    noise_power: float = 1.0,
+    max_streams: int = 4,
+) -> dict:
+    """Aggregate ZF+MMSE capacities/SINRs from batched SVD factors.
+
+    ``u``, ``s``, ``vh`` come from one batched ``numpy.linalg.svd`` over
+    ``(subcarrier, rx, tx)`` arrays: ``u`` is ``(N, rx, rx)``, ``s`` is
+    ``(N, rank)``, and ``vh`` is ``(N, tx, tx)``.
+    """
+    u = np.asarray(u)
+    s = np.asarray(s, dtype=float)
+    vh = np.asarray(vh)
+    n_sub = s.shape[0]
+    rank = s.shape[1]
+    if n_sub == 0:
+        return {
+            "capacities": [float("nan")] * max_streams,
+            "sinr_matrix": np.full((max_streams, 4), np.nan),
+            "max_trace_relative_error": 0.0,
+            "max_sinr_negative_error": 0.0,
+        }
+
+    capacities = np.full(max_streams, np.nan)
+    sinr_matrix = np.full((max_streams, 4), np.nan)
+    max_trace_error = 0.0
+    max_sinr_negative_error = 0.0
+
+    for k in range(1, min(max_streams, rank) + 1):
+        v_k = vh[:, :k].conj().transpose(0, 2, 1)
+        s_k = s[:, :k]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            w_raw = v_k / s_k[:, None, :]
+        trace_raw = np.sum(np.abs(w_raw) ** 2, axis=(1, 2))
+        bad = (
+            (np.min(s_k, axis=1) <= EPS)
+            | (~np.all(np.isfinite(s_k), axis=1))
+            | (~np.isfinite(trace_raw))
+            | (trace_raw <= 0)
+        )
+        ok = ~bad
+        if not np.any(ok):
+            continue
+
+        inv_scale = np.sqrt(1.0 / trace_raw[ok])
+        w = w_raw[ok] * inv_scale[:, None, None]
+        trace_w = np.sum(np.abs(w) ** 2, axis=(1, 2))
+        h_eq = u[ok][:, :, :k] * inv_scale[:, None, None]
+        h_eq_h = h_eq.conj().transpose(0, 2, 1)
+        gram = np.matmul(h_eq_h, h_eq) + float(noise_power) * np.eye(k)
+        try:
+            g = np.linalg.solve(gram, h_eq_h)
+        except np.linalg.LinAlgError:
+            capacities[k - 1] = float("nan")
+            continue
+        r = np.matmul(g, h_eq)
+
+        signal = np.abs(np.diagonal(r, axis1=1, axis2=2)) ** 2
+        interference = np.sum(np.abs(r) ** 2, axis=2) - signal
+        noise = float(noise_power) * np.sum(np.abs(g) ** 2, axis=2)
+        denom = interference + noise
+        sinr = np.where(denom > 0, signal / denom, 0.0)
+        cap = np.sum(np.log2(1.0 + np.maximum(sinr, 0.0)), axis=1)
+
+        capacities[k - 1] = float(np.mean(cap))
+        padded = np.zeros(4)
+        padded[:k] = np.mean(sinr, axis=0)
+        sinr_matrix[k - 1, :] = padded
+        max_trace_error = max(max_trace_error, float(np.max(np.abs(trace_w - 1.0))))
+        max_sinr_negative_error = max(
+            max_sinr_negative_error,
+            float(np.max(np.maximum(0.0, -np.min(sinr, axis=1)))),
+        )
+
+    return {
+        "capacities": capacities.tolist(),
+        "sinr_matrix": sinr_matrix,
+        "max_trace_relative_error": max_trace_error,
+        "max_sinr_negative_error": max_sinr_negative_error,
+    }
+
+
 def aggregate_zf_mmse_from_svd(
     svd_by_subcarrier: Sequence[Tuple[np.ndarray, np.ndarray, np.ndarray]],
     noise_power: float = 1.0,
