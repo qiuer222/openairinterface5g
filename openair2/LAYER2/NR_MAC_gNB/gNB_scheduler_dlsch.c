@@ -1201,7 +1201,7 @@ static void generate_dl_mac_pdu(gNB_MAC_INST *mac,
     m.sinr_db_x10 = (int16_t)(UE->mac_stats.cumul_sinrx10 / UE->mac_stats.num_sinr_meas);
   else {
     const int sinrx10 = sched_ctrl->CSI_report.ssb_rsrp_report.r[0].SINRx10;
-    if (sinrx10 >= INT16_MIN && sinrx10 <= INT16_MAX)
+    if (sinrx10 != 0)
       m.sinr_db_x10 = (int16_t)sinrx10;
     else
       m.sinr_db_x10 = (int16_t)(nr_mac_get_snr(&sched_ctrl->pucch_pc) * 10.0f);
