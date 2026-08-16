@@ -26,9 +26,10 @@ Three regions are exported:
 ```
 
 DL measurements are written from `gNB_scheduler_uci.c` when DL HARQ feedback is
-processed. UL measurements are written from `gNB_scheduler_ulsch.c` when UL
-HARQ CRC feedback is processed. The SRS channel is written from
-`phy_procedures_nr_gNB.c` after SRS channel estimation.
+processed and from `gNB_scheduler_dlsch.c` for scheduler-time snapshots. UL
+measurements are written from `gNB_scheduler_ulsch.c` when UL HARQ CRC feedback
+is processed. The SRS channel is written from `phy_procedures_nr_gNB.c` after
+SRS channel estimation.
 
 ## 3. GUI
 
@@ -58,6 +59,57 @@ gui/record/gui_gnb_log_<timestamp>/srs_<timestamp>.npy
 
 The CSV is created once when the GUI starts; one CSV file is used for the whole
 GUI run. `Stop`, `UL`, and `DL` do not create new files.
+
+### 3.1 DL CSV field mapping
+
+The DL snapshot is produced by `generate_dl_mac_pdu()` in
+`openair2/LAYER2/NR_MAC_gNB/gNB_scheduler_dlsch.c`, stored in
+`/dev/shm/gnb_meas_dl`, read by `gui/gnb_meas_reader.py`, and appended to the
+CSV by `gui/oai_gnb_monitor.py`:
+
+```text
+generate_dl_mac_pdu()
+    |
+    | frame, slot, rnti
+    | mcs, Qm, TBS (bits), nrOfLayers, rbSize, symbols
+    | rv, ndi, R, CSI cqi/ri/pmi, SINR/BLER stats
+    v
+/dev/shm/gnb_meas_dl
+    |
+    v
+gui/gnb_meas_reader.py GnbDlReader.read()
+    |
+    v
+gui_gnb_log_<timestamp>.csv
+```
+
+DL CSV columns and their source variables:
+
+| CSV column | SHM field | Source in OAI | Unit / meaning |
+|---|---|---|---|
+| `dl_frame` | `frame` | scheduled PDSCH frame | SFN |
+| `dl_slot` | `slot` | scheduled PDSCH slot | slot in SFN |
+| `dl_rnti` | `rnti` | UE RNTI | UE identifier |
+| `dl_bler` | `bler_x1000` | `sched_ctrl->dl_bler_stats.bler * 1000` | percent (`/10` in Python) |
+| `dl_sinr` | `sinr_db_x10` | averaged CSI SINR or `nr_mac_get_snr(pucch_pc)` | dB x10 |
+| `dl_mcs` | `mcs` | `sched_pdsch->mcs` | MCS index |
+| `dl_nprb` | `num_rbs` | `sched_pdsch->rbSize` | allocated PRBs |
+| `dl_layers` | `num_layers` | `sched_pdsch->nrOfLayers` | scheduled layers |
+| `dl_qm` | `qam_mod_order` | `sched_pdsch->Qm` | modulation order |
+| `dl_tbs` | `tbs` | `sched_pdsch->tb_size * 8` | transport block size in bits |
+| `dl_nsymb` | `num_symbols` | `sched_pdsch->tda_info.nrOfSymbols` | allocated PDSCH symbols |
+| `dl_rv` | `rv` | `nr_get_rv(harq->round % 4)` | redundancy version |
+| `dl_ndi` | `new_data_indicator` | `harq->ndi` | new-data indicator |
+| `dl_target_code_rate` | `target_code_rate` | `sched_pdsch->R` | code rate numerator, denominator 1024 |
+| `dl_cqi` | `cqi` | `CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb` | reported wideband CQI |
+| `dl_ri` | `ri` | CSI RI + 1, fallback to scheduled layers | reported rank / layers |
+| `dl_pmi_x1` | `pmi_x1` | CSI report PMI x1 | PMI field |
+| `dl_pmi_x2` | `pmi_x2` | CSI report PMI x2 | PMI field |
+| `dl_n_rb_dl` | `n_rb_dl` | `sched_pdsch->bwp_info.bwpSize` | active DL BWP size in PRBs |
+
+`ul_tbs` is also stored as bits (`harq->sched_pusch.tb_size * 8`), and both
+DL/UL `rv` fields now use `nr_get_rv(harq->round % 4)` instead of a hard-coded
+zero.
 
 Each CSV row includes `test_round` to identify the iperf test round. On the gNB
 DL client side, `test_round` increments every time DL is clicked. On the gNB UL

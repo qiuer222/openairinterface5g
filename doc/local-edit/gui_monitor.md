@@ -380,18 +380,18 @@ stores it.
 - Writers:
 
   1. `gNB_shm_update_dl_csi()` (`openair1/PHY/NR_TRANSPORT/gNB_shm.c`), called
-     from `gNB_scheduler_uci.c:900` after each decoded CSI report: stores the
+     from `gNB_scheduler_uci.c:902` after each decoded CSI report: stores the
      UE-reported SSB SINR
      `CSI_report.ssb_rsrp_report.r[0].SINRx10` (dB x10).
   2. DL measurement / scheduler snapshots (`gNB_shm_write_dl_meas()` in
      `gNB_scheduler_uci.c:367`, `gNB_shm_write_dl_sched()` in
-     `gNB_scheduler_dlsch.c:1193`):
+     `gNB_scheduler_dlsch.c:1224`):
      - `UE->mac_stats.cumul_sinrx10 / num_sinr_meas` when CSI SINR
        measurements exist;
      - otherwise the gNB **PUCCH power-control SNR**
        `nr_mac_get_snr(&sched_ctrl->pucch_pc)`, derived from the UE-reported
        PUCCH CQI via `pucch_snrx10 = ul_cqi * 5 - 640`
-       (`gNB_scheduler_uci.c:1020`). The fallback triggers when `SINRx10 == 0`.
+       (`gNB_scheduler_uci.c:1068`). The fallback triggers when `SINRx10 == 0`.
 
 - Read as `sinr = sinr_db_x10 / 10.0` (`gui/gnb_meas_reader.py:122`), displayed
   as `SINR: X.X dB  CQI: N  RI: N  PMI: (a,b)`.
@@ -429,3 +429,51 @@ stores it.
   `snr_db_x10 = (int16_t)(snr * 10)`.
 - Read as `snr = hdr.snr_db_x10 / 10.0` (`gui/srs_reader.py:112`), displayed
   in the SRS status line as `SNR X.X dB`.
+
+## 9. gNB DL CSV recording variables
+
+The gNB DL CSV row is written from `/dev/shm/gnb_meas_dl`. The scheduler
+snapshot is generated in `generate_dl_mac_pdu()`
+(`openair2/LAYER2/NR_MAC_gNB/gNB_scheduler_dlsch.c`) and copied through
+`gui/gnb_meas_reader.py` to `gui_gnb_log_<timestamp>.csv`:
+
+```text
+gNB MAC PDSCH dispatch
+  |
+  | mcs, Qm, TBS (bits), layers, PRBs, symbols,
+  | rv, NDI, code rate, CQI/RI/PMI, SINR, BLER
+  v
+/dev/shm/gnb_meas_dl
+  |
+  v
+gui/gnb_meas_reader.py
+  |
+  v
+gui_gnb_log_<timestamp>.csv
+```
+
+The corrected DL mapping is:
+
+| CSV column | SHM field | Correct source | Unit |
+|---|---|---|---|
+| `dl_tbs` | `tbs` | `sched_pdsch->tb_size * 8` | bits |
+| `dl_rv` | `rv` | `nr_get_rv(harq->round % 4)` | redundancy version |
+| `dl_ri` | `ri` | CSI RI + 1, else `sched_pdsch->nrOfLayers` | rank / layers |
+| `dl_ndi` | `new_data_indicator` | `harq->ndi` | NDI |
+| `dl_target_code_rate` | `target_code_rate` | `sched_pdsch->R` | 1/1024 units |
+| `dl_nsymb` | `num_symbols` | `sched_pdsch->tda_info.nrOfSymbols` | symbols |
+| `dl_pmi_x1` / `dl_pmi_x2` | `pmi_x1` / `pmi_x2` | CSI report PMI fields | PMI |
+| `dl_n_rb_dl` | `n_rb_dl` | `sched_pdsch->bwp_info.bwpSize` | PRBs |
+
+The remaining DL columns (`dl_mcs`, `dl_nprb`, `dl_layers`, `dl_qm`,
+`dl_cqi`, `dl_sinr`, `dl_bler`) are read directly from the corresponding
+`gnb_dl_meas_shm_t` fields described in the full mapping under
+`doc/local-edit/measurements/gNB_gui_monitor.md`.
+
+After changing the C side, rebuild and restart `nr-gnb` so the shared-memory
+regions are recreated with the corrected layout:
+
+```bash
+cd cmake_targets
+./build_oai --gNB --build-everything
+```

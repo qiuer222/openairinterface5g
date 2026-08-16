@@ -1208,16 +1208,16 @@ static void generate_dl_mac_pdu(gNB_MAC_INST *mac,
   }
   m.mcs = sched_pdsch->mcs;
   m.qam_mod_order = sched_pdsch->Qm;
-  m.tbs = sched_pdsch->tb_size;
+  m.tbs = (uint32_t)sched_pdsch->tb_size * 8u;
   m.num_layers = sched_pdsch->nrOfLayers;
   m.num_rbs = sched_pdsch->rbSize;
   m.num_symbols = sched_pdsch->tda_info.nrOfSymbols;
-  m.rv = 0;
+  m.rv = nr_get_rv(harq->round % 4);
   m.new_data_indicator = harq->ndi;
   m.target_code_rate = sched_pdsch->R;
   m.cqi = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb;
-  const uint8_t csi_ri = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri + 1;
-  m.ri = csi_ri > 0 ? csi_ri : sched_pdsch->nrOfLayers;
+  const uint8_t csi_ri = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.ri;
+  m.ri = csi_ri > 0 ? (uint8_t)(csi_ri + 1) : sched_pdsch->nrOfLayers;
   m.pmi_x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
   m.pmi_x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
   m.n_rb_dl = sched_pdsch->bwp_info.bwpSize;

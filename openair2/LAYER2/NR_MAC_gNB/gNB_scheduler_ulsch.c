@@ -710,11 +710,11 @@ static void handle_nr_ul_harq(gNB_MAC_INST *nrmac, NR_UE_info_t *UE, rnti_t rnti
   m.sinr_db_x10 = (int16_t)(sched_ctrl->pusch_pc.avg_snr * 10.0f);
   m.mcs = harq->sched_pusch.mcs;
   m.qam_mod_order = harq->sched_pusch.Qm;
-  m.tbs = harq->sched_pusch.tb_size;
+  m.tbs = (uint32_t)harq->sched_pusch.tb_size * 8u;
   m.num_layers = harq->sched_pusch.nrOfLayers;
   m.num_rbs = harq->sched_pusch.rbSize;
   m.num_symbols = harq->sched_pusch.tda_info.nrOfSymbols;
-  m.rv = 0;
+  m.rv = nr_get_rv(harq->round % 4);
   m.new_data_indicator = harq->ndi;
   m.target_code_rate = harq->sched_pusch.R;
   m.n_rb_ul = harq->sched_pusch.bwp_info.bwpSize;

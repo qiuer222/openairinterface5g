@@ -290,7 +290,7 @@ class GnbMainWindow(QMainWindow):
             f"RI/Layers: {m.get('ri', 0)}",
             f"MCS: {m.get('mcs', 0)}  Qm: {m.get('qm', 0)}  NPRB: {m.get('nprb', 0)}",
             f"Layers: {m.get('layers', 0)}  Symbols: {m.get('nsymb', 0)}  "
-            f"TBS: {m.get('tbs', 0)}",
+            f"TBS (bits): {m.get('tbs', 0)}",
             f"RV: {m.get('rv', 0)}  NDI: {m.get('ndi', 0)}  "
             f"PMI: ({m.get('pmi_x1', 0)},{m.get('pmi_x2', 0)})",
         ]
@@ -304,7 +304,7 @@ class GnbMainWindow(QMainWindow):
             f"SINR: {m.get('sinr', 0):.1f} dB  TA: {m.get('timing_advance', 0)}",
             f"MCS: {m.get('mcs', 0)}  Qm: {m.get('qm', 0)}  NPRB: {m.get('nprb', 0)}",
             f"Layers: {m.get('layers', 0)}  Symbols: {m.get('nsymb', 0)}  "
-            f"TBS: {m.get('tbs', 0)}",
+            f"TBS (bits): {m.get('tbs', 0)}",
             f"RV: {m.get('rv', 0)}  NDI: {m.get('ndi', 0)}  "
             f"UL CQI: {m.get('ul_cqi', 0)}  RSSI: {m.get('rssi', 0)}",
         ]
@@ -390,6 +390,8 @@ class GnbMainWindow(QMainWindow):
             "ul_mcs", "ul_nprb", "ul_layers", "ul_qm", "ul_tbs",
             "ul_timing_advance", "ul_cqi",
             "srs_capacity", "srs_rank", "srs_condition", "srs_snr",
+            "dl_nsymb", "dl_rv", "dl_ndi", "dl_target_code_rate",
+            "dl_pmi_x1", "dl_pmi_x2", "dl_n_rb_dl",
         ])
         self._csv_fd.flush()
         self.status_label.setText(f"logging to {self._csv_path}")
@@ -417,6 +419,9 @@ class GnbMainWindow(QMainWindow):
             ul.get("timing_advance", 0), ul.get("ul_cqi", 0),
             srs.get("capacity", 0), srs.get("rank", 0),
             srs.get("condition_number", 0), srs.get("snr", 0),
+            dl.get("nsymb", 0), dl.get("rv", 0), dl.get("ndi", 0),
+            dl.get("target_code_rate", 0),
+            dl.get("pmi_x1", 0), dl.get("pmi_x2", 0), dl.get("n_rb_dl", 0),
         ])
         self._csv_fd.flush()
 

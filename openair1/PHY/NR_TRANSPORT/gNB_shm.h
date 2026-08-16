@@ -38,7 +38,7 @@ typedef struct __attribute__((packed)) {
   int16_t   sinr_db_x10;
   uint8_t   mcs;
   uint8_t   qam_mod_order;
-  uint32_t  tbs;
+  uint32_t  tbs;                   /* transport block size (bits)   */
   uint8_t   num_layers;
   uint16_t  num_rbs;
   uint16_t  num_symbols;
@@ -64,7 +64,7 @@ typedef struct __attribute__((packed)) {
   int16_t   sinr_db_x10;
   uint8_t   mcs;
   uint8_t   qam_mod_order;
-  uint32_t  tbs;
+  uint32_t  tbs;                   /* transport block size (bits)   */
   uint8_t   num_layers;
   uint16_t  num_rbs;
   uint16_t  num_symbols;
