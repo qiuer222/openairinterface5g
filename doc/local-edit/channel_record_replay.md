@@ -279,20 +279,78 @@ If the variable is missing or the file fails to load, the log clearly shows the 
 [HW] Failed to load channel file: /tmp/missing.bin
 ```
 
+### 3.5 Replay GUI `.npy` Recordings
+
+The GUI saves CSI-RS snapshots as `channel_*.npy` and SRS snapshots as
+`srs_*.npy`. The values are the same OAI `c16_t` fixed-point estimates, so they
+can be converted to the `.bin` format above without changing the replay engine.
+
+```bash
+# CSI-RS GUI snapshots -> multi-slot .bin
+.venv/bin/python gui/npy_to_rfsim_bin.py \
+  --kind csi --n-rb 106 --scs 30000 \
+  gui/record/gui_log_20260806_222820/channel_*.npy \
+  --output /tmp/csi_rs_channel.bin
+
+# SRS GUI snapshots -> multi-slot .bin
+.venv/bin/python gui/npy_to_rfsim_bin.py \
+  --kind srs --n-rb 106 --scs 30000 \
+  gui/record/gnb_log_20260806_215012/srs_*.npy \
+  --output /tmp/srs_channel.bin
+
+# Verify the generated binary format and compare every slot against the .npy source
+.venv/bin/python gui/npy_to_rfsim_bin.py --verify --kind csi \
+  /tmp/csi_rs_channel.bin \
+  --reference gui/record/gui_log_20260806_222820/channel_*.npy
+
+.venv/bin/python gui/npy_to_rfsim_bin.py --verify --kind srs \
+  /tmp/srs_channel.bin \
+  --reference gui/record/gnb_log_20260806_215012/srs_*.npy
+```
+
+For a 2x2 CSI-RS replay, use the 106 PRB 2x2 RFSim gNB config, pass the
+converted file to the gNB, and connect a 2x2 UE:
+
+```bash
+sudo env CHANNEL_FILE=/tmp/csi_rs_channel.bin \
+  ./cmake_targets/ran_build/build/nr-softmodem \
+  -O targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.sa.band78.fr1.106PRB.2x2.usrpn300.conf \
+  --rfsim
+```
+
+```bash
+sudo ./cmake_targets/ran_build/build/nr-uesoftmodem \
+  -r 106 --numerology 1 --band 78 -C 3319680000 \
+  --ue-nb-ant-tx 2 --ue-nb-ant-rx 2 \
+  --uecap_file targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports2.xml \
+  -O ci-scripts/conf_files/nrue.uicc.conf \
+  --rfsim --rfsimulator.[0].serveraddr 127.0.0.1
+```
+
+Verify that RFSim loaded the converted file:
+
+```text
+[HW] [rfsim] Loading channel file: /tmp/csi_rs_channel.bin
+[HW] [rfsim] Loaded SRS channel file: /tmp/csi_rs_channel.bin (N slots, 2x2, fft=2048)
+```
+
 ### 4. Build
 
 ```bash
 ./build_oai -w USRP --ninja --nrUE --gNB
 ```
 
-### 5. verified comand
+### 5. Verified 2x2 Record Command
+
 ```bash
-sudo ./nr-uesoftmodem -r 106 --numerology 1 --band 78 -C 3319680000 --ue-nb-ant-tx 2 --ue-nb-ant-rx 2 --uecap_file /home/qiuer/openairinterface5g/targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports2.xml -O /home/qiuer/openairinterface5g/ci-scripts/conf_files/nrue.uicc.conf --rfsim --record-csi-ch 1
-
-sudo ./nr-uesoftmodem -r 106 --numerology 1 --band 78 -C 3319680000 --ue-nb-ant-tx 2 --ue-nb-ant-rx 2 --uecap_file /home/qiuer/openairinterface5g/targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports2.xml -O /home/qiuer/openairinterface5g/ci-scripts/conf_files/nrue.uicc.conf --rfsim --record-csi-ch 1
-
-
+sudo ./cmake_targets/ran_build/build/nr-uesoftmodem \
+  -r 106 --numerology 1 --band 78 -C 3319680000 \
+  --ue-nb-ant-tx 2 --ue-nb-ant-rx 2 \
+  --uecap_file targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports2.xml \
+  -O ci-scripts/conf_files/nrue.uicc.conf \
+  --rfsim --record-csi-ch 1
 ```
+
 ---
 
 ## Mode Selection Summary
@@ -319,6 +377,7 @@ sudo ./nr-uesoftmodem -r 106 --numerology 1 --band 78 -C 3319680000 --ue-nb-ant-
 | `radio/rfsimulator/apply_channel_fd.c` | Replay engine (DFT→multiply→IDFT) |
 | `radio/rfsimulator/rfsimulator.h` | Replay interface declarations |
 | `radio/rfsimulator/CMakeLists.txt` | Build: `apply_channel_fd.c` → `librfsimulator.so` |
+| `gui/npy_to_rfsim_bin.py` | Convert GUI `channel_*.npy` / `srs_*.npy` to RFSim `.bin` |
 | `executables/softmodem-common.h` | `--record-srs-ch` config definition |
 | `executables/nr-uesoftmodem.h` | `--record-csi-ch` config definition |
 | `radio/COMMON/record_player.c` / `.h` | Legacy IQ record/player (not SRS-specific) |

@@ -94,6 +94,7 @@ Both dumps share the same packed format:
 | `radio/rfsimulator/apply_channel_fd.c` | Replay engine (DFT → multiply → IDFT) |
 | `radio/rfsimulator/rfsimulator.h` | Replay interface |
 | `radio/rfsimulator/CMakeLists.txt` | Build: `librfsimulator.so` |
+| `gui/npy_to_rfsim_bin.py` | Convert GUI `.npy` snapshots to RFSim `.bin` |
 | `executables/softmodem-common.h` | `--record-srs-ch` config |
 | `executables/nr-uesoftmodem.h` | `--record-csi-ch` config |
 
@@ -118,6 +119,23 @@ Expected logs:
 ```
 [HW] [rfsim] Loading channel file: /tmp/srs_channel.bin
 [HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096)
+```
+
+### Replaying GUI `.npy` Recordings
+
+The GUI saves CSI-RS snapshots as `channel_*.npy` and SRS snapshots as
+`srs_*.npy`. Convert them to the same `.bin` format before setting
+`CHANNEL_FILE`:
+
+```bash
+.venv/bin/python gui/npy_to_rfsim_bin.py \
+  --kind csi --n-rb 106 --scs 30000 \
+  gui/record/gui_log_20260806_222820/channel_*.npy \
+  --output /tmp/csi_rs_channel.bin
+
+.venv/bin/python gui/npy_to_rfsim_bin.py --verify --kind csi \
+  /tmp/csi_rs_channel.bin \
+  --reference gui/record/gui_log_20260806_222820/channel_*.npy
 ```
 
 ## Replay Details
