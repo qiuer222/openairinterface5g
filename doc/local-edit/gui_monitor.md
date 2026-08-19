@@ -335,6 +335,13 @@ These changes are implemented in `gui/oai_ue_monitor.py`.
   already exists, the GUI asks for another name.
 - Choosing **OK** moves the CSV, channel/srs files, and iperf log into:
   `gui/record/<user_folder>/`
+- The CSI channel directory is preserved as a subfolder:
+
+  ```text
+  gui/record/<user_folder>/gui_ue_log_<timestamp>.csv
+  gui/record/<user_folder>/gui_ue_log_<timestamp>/channel_<timestamp>.npy
+  ```
+
 - Choosing **Cancel** leaves the data in their original locations.
 
 ### 7.3 Log path handling

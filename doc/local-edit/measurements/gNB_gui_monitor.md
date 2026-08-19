@@ -120,7 +120,13 @@ process restarts.
 At startup the GUI clears the configured iperf log. On exit it asks whether the
 CSV, SRS channel data, and iperf log should be moved into
 `gui/record/<user_folder>/`. The default folder name is the first CSV timestamp;
-if the folder already exists, the GUI asks for another name.
+if the folder already exists, the GUI asks for another name. The SRS channel
+directory is preserved as a subfolder:
+
+```text
+gui/record/<user_folder>/gui_gnb_log_<timestamp>.csv
+gui/record/<user_folder>/gui_gnb_log_<timestamp>/srs_<timestamp>.npy
+```
 
 iperf3 pairing:
 

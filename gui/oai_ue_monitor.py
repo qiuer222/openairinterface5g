@@ -482,12 +482,10 @@ class MainWindow(QMainWindow):
         os.makedirs(dest, exist_ok=True)
         shutil.move(self._csv_path, os.path.join(dest, os.path.basename(self._csv_path)))
         if self._channel_dir and os.path.isdir(self._channel_dir):
-            for name in os.listdir(self._channel_dir):
-                shutil.move(
-                    os.path.join(self._channel_dir, name),
-                    os.path.join(dest, name),
-                )
-            os.rmdir(self._channel_dir)
+            shutil.move(
+                self._channel_dir,
+                os.path.join(dest, os.path.basename(self._channel_dir)),
+            )
         if os.path.exists(self._log_path):
             shutil.move(self._log_path, os.path.join(dest, os.path.basename(self._log_path)))
         self.status_label.setText(f"recordings saved to {dest}")
