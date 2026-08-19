@@ -113,8 +113,9 @@ zero.
 
 Each CSV row includes `test_round` to identify the iperf test round. On the gNB
 DL client side, `test_round` increments every time DL is clicked. On the gNB UL
-server side, it increments when the iperf log resumes after an idle gap. The
-counter resets to zero when the GUI process restarts.
+server side, it increments each time the iperf3 server reports a new
+`Accepted connection from ...` line. The counter resets to zero when the GUI
+process restarts.
 
 At startup the GUI clears the configured iperf log. On exit it asks whether the
 CSV, SRS channel data, and iperf log should be moved into

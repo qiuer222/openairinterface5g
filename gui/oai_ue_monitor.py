@@ -99,7 +99,6 @@ class MainWindow(QMainWindow):
         self._csv_start_ts = ""
         self._test_round = 0
         self._log_based_test_round = False
-        self._last_log_change_time: Optional[float] = None
 
         self._clear_log_file()
         self._build_ui()
@@ -251,11 +250,6 @@ class MainWindow(QMainWindow):
 
         log_changed = self._iperf_log_changed()
         if log_changed:
-            if self._log_based_test_round:
-                now = time.monotonic()
-                if self._last_log_change_time is None or now - self._last_log_change_time > 1.0:
-                    self._test_round += 1
-                self._last_log_change_time = now
             self._save_channel(self._last_csi.get("channel"), stamp)
             self._write_csv(stamp)
 
@@ -309,9 +303,13 @@ class MainWindow(QMainWindow):
 
     def _on_iperf_log(self, line: str) -> None:
         self.log_view.appendPlainText(line)
+        if self._log_based_test_round and "Accepted connection from" in line:
+            self._test_round += 1
 
     def _on_iperf_finished(self, msg: str) -> None:
-        self.status_label.setText(msg)
+        self.status_label.setText(f"{msg} | iperf完成")
+        if not self._log_based_test_round:
+            QApplication.beep()
 
     def _on_iperf_error(self, msg: str) -> None:
         self.status_label.setText(f"iperf error: {msg}")

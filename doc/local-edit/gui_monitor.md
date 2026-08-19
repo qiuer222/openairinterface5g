@@ -207,8 +207,8 @@ n_rb_dl, scs, nb_antennas_rx
 
 `test_round` identifies the iperf test round. On client-side tests it is
 incremented each time UL/DL is clicked. On server-side tests it is incremented
-when the iperf log resumes after an idle gap. The counter resets to zero when
-the GUI process restarts.
+each time the iperf3 server reports a new `Accepted connection from ...` line.
+The counter resets to zero when the GUI process restarts.
 
 ### 4.3 `gui/record/gui_ue_log_<timestamp>/channel_<timestamp>.npy`
 
@@ -311,8 +311,8 @@ These changes are implemented in `gui/oai_ue_monitor.py`.
 - One CSV file is created at GUI startup and used for the whole run. Clicking
   `UL`/`DL` or `Stop` does not create a new file.
 - `test_round` is written in every CSV row. Client-side tests increment it on
-  each `UL`/`DL` click; server-side tests increment it when the iperf log
-  resumes after an idle gap.
+  each `UL`/`DL` click; server-side tests increment it each time the iperf3
+  server reports a new `Accepted connection from ...` line.
 - `_iperf_log_changed()` compares the current `iperf.log` `st_size` and
   `st_mtime_ns` with the last seen state.
 - `_reset_log_state()` records the file state when the run CSV is opened.
