@@ -109,7 +109,8 @@ DL CSV columns and their source variables:
 
 `ul_tbs` is also stored as bits (`harq->sched_pusch.tb_size * 8`), and both
 DL/UL `rv` fields now use `nr_get_rv(harq->round % 4)` instead of a hard-coded
-zero.
+zero. The gNB UL CSV also records `ul_tpmi` from
+`harq->sched_pusch.tpmi`; it is written only when TPMI is non-negative.
 
 Each CSV row includes `test_round` to identify the iperf test round. On the gNB
 DL client side, `test_round` increments every time DL is clicked. On the gNB UL
@@ -140,7 +141,83 @@ iperf3 pairing:
 Edit `gui/gnb_config.json` for the UE IP, port, duration, log file, and SRS SNR
 assumption.
 
-## 4. Build
+## 4. CSV variable reference
+
+The CSV row is written by `_write_csv()` in `gui/oai_gnb_monitor.py`. This
+section lists every column and where the value comes from in OAI / the GUI.
+
+### 4.1 Common columns
+
+| CSV column | GUI source | OAI source | Meaning |
+|---|---|---|---|
+| `timestamp` | `datetime.now()` in `_refresh()` | N/A | GUI local wall-clock time in `%Y%m%d_%H%M%S_%f` |
+| `test_round` | GUI counter | N/A | iperf round; client-side click or server-side `Accepted connection` line |
+| `throughput_mbps` | `IperfController.parse_iperf3_line()` | iperf3 stdout interval line | instantaneous bits/sec converted to Mbps |
+
+### 4.2 DL columns
+
+All DL fields are written by `generate_dl_mac_pdu()` in
+`openair2/LAYER2/NR_MAC_gNB/gNB_scheduler_dlsch.c`, copied through
+`/dev/shm/gnb_meas_dl`, and read by `gui/gnb_meas_reader.py`.
+
+| CSV column | SHM field | OAI source | Meaning / unit |
+|---|---|---|---|
+| `dl_frame` | `frame` | `generate_dl_mac_pdu()` frame argument | PDSCH frame number |
+| `dl_slot` | `slot` | `generate_dl_mac_pdu()` slot argument | PDSCH slot |
+| `dl_rnti` | `rnti` | scheduled UE `rnti` | RNTI |
+| `dl_bler` | `bler_x1000` | `sched_ctrl->dl_bler_stats.bler * 1000` | BLER in percent after Python `/10` |
+| `dl_sinr` | `sinr_db_x10` | `UE->mac_stats.cumul_sinrx10 / num_sinr_meas`, else CSI `ssb_rsrp_report.r[0].SINRx10`, else `nr_mac_get_snr(&sched_ctrl->pucch_pc)` | SINR in dB after Python `/10` |
+| `dl_mcs` | `mcs` | `sched_pdsch->mcs` | DL MCS |
+| `dl_nprb` | `num_rbs` | `sched_pdsch->rbSize` | allocated PRBs |
+| `dl_layers` | `num_layers` | `sched_pdsch->nrOfLayers` | scheduled DL layers |
+| `dl_qm` | `qam_mod_order` | `sched_pdsch->Qm` | modulation order |
+| `dl_tbs` | `tbs` | `sched_pdsch->tb_size * 8` | TBS in bits |
+| `dl_nsymb` | `num_symbols` | `sched_pdsch->tda_info.nrOfSymbols` | allocated PDSCH symbols |
+| `dl_rv` | `rv` | `nr_get_rv(harq->round % 4)` | redundancy version |
+| `dl_ndi` | `new_data_indicator` | `harq->ndi` | new-data indicator |
+| `dl_target_code_rate` | `target_code_rate` | `sched_pdsch->R` | code rate numerator, denominator 1024 |
+| `dl_cqi` | `cqi` | `sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.wb_cqi_1tb` | reported wideband CQI |
+| `dl_ri` | `ri` | raw CSI `ri` + 1, else `sched_pdsch->nrOfLayers` | reported rank / layers |
+| `dl_pmi_x1` | `pmi_x1` | same CSI report `pmi_x1` | PMI part 1 |
+| `dl_pmi_x2` | `pmi_x2` | same CSI report `pmi_x2` | PMI part 2 |
+| `dl_n_rb_dl` | `n_rb_dl` | `sched_pdsch->bwp_info.bwpSize` | active DL BWP size in PRBs |
+
+### 4.3 UL columns
+
+UL fields are written by `handle_nr_ul_harq()` in
+`openair2/LAYER2/NR_MAC_gNB/gNB_scheduler_ulsch.c`, copied through
+`/dev/shm/gnb_meas_ul`, and read by `gui/gnb_meas_reader.py`.
+
+| CSV column | SHM field | OAI source | Meaning / unit |
+|---|---|---|---|
+| `ul_frame` | `frame` | `harq->sched_pusch.frame` | PUSCH frame number |
+| `ul_slot` | `slot` | `harq->sched_pusch.slot` | PUSCH slot |
+| `ul_rnti` | `rnti` | `rnti` argument from CRC indication | RNTI |
+| `ul_bler` | `bler_x1000` | `sched_ctrl->ul_bler_stats.bler * 1000` | BLER in percent after Python `/10` |
+| `ul_sinr` | `sinr_db_x10` | `sched_ctrl->pusch_pc.avg_snr * 10` | SINR in dB after Python `/10` |
+| `ul_mcs` | `mcs` | `harq->sched_pusch.mcs` | UL MCS |
+| `ul_nprb` | `num_rbs` | `harq->sched_pusch.rbSize` | allocated PRBs |
+| `ul_layers` | `num_layers` | `harq->sched_pusch.nrOfLayers` | scheduled UL layers |
+| `ul_qm` | `qam_mod_order` | `harq->sched_pusch.Qm` | modulation order |
+| `ul_tbs` | `tbs` | `harq->sched_pusch.tb_size * 8` | TBS in bits |
+| `ul_timing_advance` | `timing_advance` | reserved; not populated by current UL HARQ writer | currently 0 |
+| `ul_cqi` | `ul_cqi` | reserved; not populated by current UL HARQ writer | currently 0 |
+| `ul_tpmi` | `tpmi` | `harq->sched_pusch.tpmi` | UL TPMI index, written only when non-negative |
+
+### 4.4 SRS columns
+
+SRS channel data is written by `handle_srs()` in
+`openair1/SCHED_NR/phy_procedures_nr_gNB.c` through `/dev/shm/srs_channel`.
+Capacity/rank/condition are computed in `gui/srs_reader.py`.
+
+| CSV column | SHM source | OAI source | Meaning / unit |
+|---|---|---|---|
+| `srs_capacity` | computed from channel | `srs_estimated_channel_freq` via `CsiRsReader._channel_metrics()` | SVD capacity, depends on configured `snr_db` |
+| `srs_rank` | computed from channel | same channel metrics | estimated SRS rank |
+| `srs_condition` | computed from channel | same channel metrics | channel condition number |
+| `srs_snr` | `gnb_srs_shm_hdr_t.snr_db_x10` | `nr_srs_rx_procedures()` returned `snr`, stored as `(int16_t)(snr * 10)` | SRS SNR in dB after Python `/10` |
+
+## 5. Build
 
 The new C files are part of the normal gNB build:
 

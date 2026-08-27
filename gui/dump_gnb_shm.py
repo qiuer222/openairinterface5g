@@ -47,7 +47,8 @@ def main() -> None:
             f"received={ul.ulsch_received} errors={ul.ulsch_errors} "
             f"bler_x1000={ul.bler_x1000} sinr_db_x10={ul.sinr_db_x10} "
             f"mcs={ul.mcs} qm={ul.qam_mod_order} nprb={ul.num_rbs} "
-            f"tbs_bits={ul.tbs} ta={ul.timing_advance} ul_cqi={ul.ul_cqi}"
+            f"tbs_bits={ul.tbs} ta={ul.timing_advance} ul_cqi={ul.ul_cqi} "
+            f"tpmi={ul.tpmi}"
         )
 
     srs = _read_struct(GNB_SRS_SHM, GnbSrsShmHdr, GNB_SRS_SHM_TOTAL_SIZE)

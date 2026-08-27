@@ -73,6 +73,7 @@ typedef struct __attribute__((packed)) {
   uint16_t  target_code_rate;
   uint16_t  timing_advance;
   uint8_t   ul_cqi;
+  uint8_t   tpmi;
   int16_t   rssi;
   uint16_t  n_rb_ul;
 } gnb_ul_meas_shm_t;

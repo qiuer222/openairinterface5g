@@ -300,7 +300,8 @@ class GnbMainWindow(QMainWindow):
             f"Layers: {m.get('layers', 0)}  Symbols: {m.get('nsymb', 0)}  "
             f"TBS (bits): {m.get('tbs', 0)}",
             f"RV: {m.get('rv', 0)}  NDI: {m.get('ndi', 0)}  "
-            f"UL CQI: {m.get('ul_cqi', 0)}  RSSI: {m.get('rssi', 0)}",
+            f"UL CQI: {m.get('ul_cqi', 0)}  TPMI: {m.get('tpmi', 0)}  "
+            f"RSSI: {m.get('rssi', 0)}",
         ]
         self.ul_label.setText("\n".join(lines))
 
@@ -397,6 +398,7 @@ class GnbMainWindow(QMainWindow):
             "srs_capacity", "srs_rank", "srs_condition", "srs_snr",
             "dl_nsymb", "dl_rv", "dl_ndi", "dl_target_code_rate",
             "dl_pmi_x1", "dl_pmi_x2", "dl_n_rb_dl",
+            "ul_tpmi",
         ])
         self._csv_fd.flush()
         self.status_label.setText(f"logging to {self._csv_path}")
@@ -427,6 +429,7 @@ class GnbMainWindow(QMainWindow):
             dl.get("nsymb", 0), dl.get("rv", 0), dl.get("ndi", 0),
             dl.get("target_code_rate", 0),
             dl.get("pmi_x1", 0), dl.get("pmi_x2", 0), dl.get("n_rb_dl", 0),
+            ul.get("tpmi", 0),
         ])
         self._csv_fd.flush()
 

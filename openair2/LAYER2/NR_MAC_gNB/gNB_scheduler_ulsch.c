@@ -717,6 +717,8 @@ static void handle_nr_ul_harq(gNB_MAC_INST *nrmac, NR_UE_info_t *UE, rnti_t rnti
   m.rv = nr_get_rv(harq->round % 4);
   m.new_data_indicator = harq->ndi;
   m.target_code_rate = harq->sched_pusch.R;
+  if (harq->sched_pusch.tpmi >= 0)
+    m.tpmi = (uint8_t)harq->sched_pusch.tpmi;
   m.n_rb_ul = harq->sched_pusch.bwp_info.bwpSize;
   gNB_shm_write_ul_meas(&m, !crc_status);
 

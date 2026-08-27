@@ -67,6 +67,7 @@ class GnbUlShm(ctypes.Structure):
         ("target_code_rate",   ctypes.c_uint16),
         ("timing_advance",     ctypes.c_uint16),
         ("ul_cqi",             ctypes.c_uint8),
+        ("tpmi",               ctypes.c_uint8),
         ("rssi",               ctypes.c_int16),
         ("n_rb_ul",            ctypes.c_uint16),
     ]
@@ -194,6 +195,7 @@ class GnbUlReader:
             "target_code_rate": m.target_code_rate,
             "timing_advance": m.timing_advance,
             "ul_cqi": m.ul_cqi,
+            "tpmi": m.tpmi,
             "rssi": m.rssi,
             "n_rb_ul": m.n_rb_ul,
             "received": received,
