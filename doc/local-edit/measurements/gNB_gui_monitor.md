@@ -117,6 +117,10 @@ server side, it increments each time the iperf3 server reports a new
 `Accepted connection from ...` line. The counter resets to zero when the GUI
 process restarts.
 
+CSV rows are only appended when the newest line in the monitored iperf log is
+a 1-second instantaneous throughput interval. Final iperf3 average/summary
+lines are ignored.
+
 At startup the GUI clears the configured iperf log. On exit it asks whether the
 CSV, SRS channel data, and iperf log should be moved into
 `gui/record/<user_folder>/`. The default folder name is the first CSV timestamp;

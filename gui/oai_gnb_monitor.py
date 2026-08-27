@@ -36,7 +36,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gui.gnb_meas_reader import GnbDlReader, GnbUlReader
-from gui.iperf_controller import IperfController
+from gui.iperf_controller import IperfController, parse_iperf3_line
 from gui.plot_manager import GnbPlotManager
 from gui.srs_reader import SrsReader
 
@@ -352,10 +352,18 @@ class GnbMainWindow(QMainWindow):
             self._log_state = None
             return False
         state = (st.st_size, st.st_mtime_ns)
-        if self._log_state is None or state != self._log_state:
-            self._log_state = state
-            return True
-        return False
+        if self._log_state is not None and state == self._log_state:
+            return False
+        self._log_state = state
+        return parse_iperf3_line(self._read_last_iperf_line()) is not None
+
+    def _read_last_iperf_line(self) -> str:
+        try:
+            with open(self._log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.read().splitlines()
+            return lines[-1] if lines else ""
+        except OSError:
+            return ""
 
     def _reset_log_state(self) -> None:
         try:
