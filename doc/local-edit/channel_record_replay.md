@@ -207,6 +207,12 @@ The recorded slots are loaded into memory once at startup. **Only the last 100 s
 
 During replay the slot index cycles: `slot_idx = current_slot % num_slots`, wrapping when the loaded count is exceeded.
 
+The replay DFT/IDFT work buffers are allocated 32-byte aligned as required by
+OAI's `dft`/`idft` wrappers. Recorded H is interpreted in the OAI reference
+amplitude scale (`AMP = 2^9 = 512` in this build, i.e. unit gain is stored as
+H ≈ 512). Set `RFSIM_H_SCALE_BITS` (default `9`) to override the scale for
+files recorded from another AMP build.
+
 | Variable | Type | Scope | Description |
 |----------|------|-------|-------------|
 | `srs_replay_loaded` | `int` | global | Flag checked by `simulator.cpp` |
@@ -269,7 +275,7 @@ Expected replay log when loading succeeds:
 
 ```
 [HW] [rfsim] Loading channel file: /tmp/srs_channel.bin
-[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096)
+[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096, h_scale_bits=9)
 ```
 
 If the variable is missing or the file fails to load, the log clearly shows the fallback:
@@ -331,7 +337,7 @@ Verify that RFSim loaded the converted file:
 
 ```text
 [HW] [rfsim] Loading channel file: /tmp/csi_rs_channel.bin
-[HW] [rfsim] Loaded SRS channel file: /tmp/csi_rs_channel.bin (N slots, 2x2, fft=2048)
+[HW] [rfsim] Loaded SRS channel file: /tmp/csi_rs_channel.bin (N slots, 2x2, fft=2048, h_scale_bits=9)
 ```
 
 ### 4. Build

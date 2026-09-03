@@ -16,6 +16,7 @@
 
 #include "PHY/TOOLS/tools_defs.h"
 #include "openair1/SIMULATION/TOOLS/sim.h"
+#include "PHY/impl_defs_top.h"
 #include "common/platform_types.h"
 #include "rfsimulator.h"
 
@@ -66,10 +67,24 @@ static struct {
   int    fft_size;
   int    n_sc;
   int    sc_off;
+  int    h_amp_bits;  /* fixed-point scale of recorded H: unit gain == 2^h_amp_bits */
   int    num_slots;
   int    current_slot;
   c16_t *h_data;   // [num_slots][rx][tx][subcarrier]
 } srs_replay = {0};
+
+/*
+ * Recorded H is produced by OAI SRS/CSI-RS LS estimation in the TX reference
+ * amplitude scale (AMP).  In this build AMP = 1 << 9 = 512, so an identity
+ * channel is stored as H ~= 512, not 32768.  c16mulShift(..., h_amp_bits)
+ * therefore restores the true channel gain.  RFSIM_H_SCALE_BITS can override
+ * the value when files from another AMP build are replayed.
+ */
+#ifndef AMP_SHIFT
+#define RFSIM_H_AMP_BITS_DEFAULT 9
+#else
+#define RFSIM_H_AMP_BITS_DEFAULT AMP_SHIFT
+#endif
 
 // ---- Load function ----
 int rfsim_load_srs_file(const char *path) {
@@ -85,6 +100,15 @@ int rfsim_load_srs_file(const char *path) {
   srs_replay.fft_size  = hdr.fft_size;
   srs_replay.n_sc      = hdr.n_subcarriers;
   srs_replay.sc_off    = hdr.subcarrier_offset;
+
+  const char *scale_env = getenv("RFSIM_H_SCALE_BITS");
+  int scale_bits = scale_env ? atoi(scale_env) : RFSIM_H_AMP_BITS_DEFAULT;
+  if (scale_bits < 1)
+    scale_bits = 1;
+  if (scale_bits > 15)
+    scale_bits = 15;
+  srs_replay.h_amp_bits = scale_bits;
+
   // Limit loaded slots to avoid excessive memory use with continuous recording
   static const int MAX_REPLAY_SLOTS = 100;
   int total_slots = hdr.num_slots_recorded;
@@ -138,8 +162,9 @@ int rfsim_load_srs_file(const char *path) {
   srs_replay.loaded = 1;
   srs_replay_loaded = 1;
 
-  LOG_I(HW, "[rfsim] Loaded SRS channel file: %s (%d slots, %dx%d, fft=%d)\n",
-        path, srs_replay.num_slots, srs_replay.num_rx, srs_replay.num_tx, srs_replay.fft_size);
+  LOG_I(HW, "[rfsim] Loaded SRS channel file: %s (%d slots, %dx%d, fft=%d, h_scale_bits=%d)\n",
+        path, srs_replay.num_slots, srs_replay.num_rx, srs_replay.num_tx,
+        srs_replay.fft_size, srs_replay.h_amp_bits);
   return 0;
 }
 
@@ -199,22 +224,41 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
   const int h_per_slot = nrx * ntx * n_sc;
   const c16_t *h_slot = srs_replay.h_data + (size_t)slot_idx * h_per_slot;
 
-  // Work buffers (static, allocated once at max fft_size)
+  // Work buffers (static, allocated once at max fft_size).
+  // OAI's dft/idft wrappers require 32-byte-aligned output buffers, so use
+  // posix_memalign() instead of calloc() (which only guarantees 16 bytes).
   static c16_t *freq_buf  = NULL;
   static c16_t *work_buf  = NULL;
-  static c16_t *time_buf  = NULL;
+  static cf_t  *time_buf  = NULL;  // float accumulator to avoid int16 overflow
   static int    alloc_fft = 0;
 
   if (alloc_fft != fft_size) {
     free(freq_buf); free(work_buf); free(time_buf);
-    freq_buf = calloc(fft_size, sizeof(c16_t));
-    work_buf = calloc(fft_size, sizeof(c16_t));
-    time_buf = calloc(fft_size, sizeof(c16_t));
-    alloc_fft = fft_size;
-    if (!freq_buf || !work_buf || !time_buf) {
+    freq_buf = NULL;
+    work_buf = NULL;
+    time_buf = NULL;
+
+    const size_t c16_bytes = (size_t)fft_size * sizeof(c16_t);
+    const size_t cf_bytes  = (size_t)fft_size * sizeof(cf_t);
+    int aligned_ok = 0;
+    aligned_ok |= posix_memalign((void **)&freq_buf, 32, c16_bytes);
+    aligned_ok |= posix_memalign((void **)&work_buf, 32, c16_bytes);
+    aligned_ok |= posix_memalign((void **)&time_buf, 32, cf_bytes);
+    if (aligned_ok != 0) {
+      free(freq_buf);
+      free(work_buf);
+      free(time_buf);
+      freq_buf = NULL;
+      work_buf = NULL;
+      time_buf = NULL;
+      alloc_fft = 0;
       memset(after_channel_sig, 0, nbSamples * sizeof(cf_t));
       return;
     }
+    memset(freq_buf, 0, c16_bytes);
+    memset(work_buf, 0, c16_bytes);
+    memset(time_buf, 0, cf_bytes);
+    alloc_fft = fft_size;
   }
 
   memset(after_channel_sig, 0, nbSamples * sizeof(cf_t));
@@ -228,8 +272,8 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
     const int blk_len = min(block_size, nbSamples - blk_start);
     const int in_offset = blk_start;  // input_sig reads from same index
 
-    // Sum over TX antennas
-    memset(time_buf, 0, fft_size * sizeof(c16_t));
+    // Sum over TX antennas (float accumulator to avoid int16 overflow)
+    memset(time_buf, 0, (size_t)fft_size * sizeof(cf_t));
 
     for (int ta = 0; ta < ntx; ta++) {
       // DFT input_sig[ta][in_offset .. in_offset+blk_len-1] → freq_buf
@@ -243,7 +287,7 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
       const c16_t *h_ra_ta = h_slot + ((size_t)rxAnt * ntx + ta) * n_sc;
       for (int k = 0; k < n_sc; k++) {
         int idx = (sc_off + k) % fft_size;
-        work_buf[idx] = c16mulShift(work_buf[idx], h_ra_ta[k], 15);
+        work_buf[idx] = c16mulShift(work_buf[idx], h_ra_ta[k], srs_replay.h_amp_bits);
       }
 
       // IDFT back to time domain, accumulate
@@ -254,11 +298,11 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
       }
     }
 
-    // Copy block to output with IFFT normalization (÷fft_size)
-    const float norm = 1.0f / fft_size;
+    // Copy block to output. OAI dft/idft already use matched 1/sqrt(N)
+    // normalization, so no extra division by fft_size is allowed here.
     for (int n = 0; n < blk_len; n++) {
-      after_channel_sig[blk_start + n].r += time_buf[n].r * norm;
-      after_channel_sig[blk_start + n].i += time_buf[n].i * norm;
+      after_channel_sig[blk_start + n].r += time_buf[n].r;
+      after_channel_sig[blk_start + n].i += time_buf[n].i;
     }
   }
 

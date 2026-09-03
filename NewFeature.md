@@ -118,7 +118,7 @@ Expected logs:
 
 ```
 [HW] [rfsim] Loading channel file: /tmp/srs_channel.bin
-[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096)
+[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096, h_scale_bits=9)
 ```
 
 ### Replaying GUI `.npy` Recordings
