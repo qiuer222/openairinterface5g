@@ -100,7 +100,7 @@ Both dumps share the same packed format, enabling direct reuse by the replay eng
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | `magic` | `0x48534D52` (ASCII `"RSMH"`) |
-| 4 | 2 | `version` | `1` |
+| 4 | 2 | `version` | `1`: raw H (native recorders); `2`: normalized H + per-slot gains (GUI converter) |
 | 6 | 1 | `num_rx_ant` | RX antennas (e.g. 1, 2, 4) |
 | 7 | 1 | `num_tx_ant` | TX ports (SRS: UE ports, CSI-RS: gNB ports) |
 | 8 | 2 | `fft_size` | OFDM symbol size (e.g. 4096) |
@@ -110,7 +110,12 @@ Both dumps share the same packed format, enabling direct reuse by the replay eng
 | 20 | 2 | `n_subcarriers` | Subcarriers stored (typically `fft_size`) |
 | 22 | 2 | `subcarrier_offset` | DC offset |
 | 24 | 1 | `n_csi_symbols` / `n_srs_symbols` | Symbol count |
-| 25 | 23 | `reserved` | Zero padding |
+| 25 | 1 | `h_scale_bits` | H AMP scale used by version-2 files (9 in this build); 0 for version-1 files |
+| 26 | 22 | `reserved` | Zero padding |
+
+### Version-2 Gain Array
+
+Immediately after the 48-byte header, version-2 files contain `num_slots × float` linear gain values (`slot_gain_lin`), one per slot, followed by the per-slot records below. The stored H is normalized to the AMP scale; replay multiplies its result by `slot_gain_lin` to restore the recorded absolute channel power.
 
 ### Per-Slot Record
 
@@ -275,7 +280,7 @@ Expected replay log when loading succeeds:
 
 ```
 [HW] [rfsim] Loading channel file: /tmp/srs_channel.bin
-[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096, h_scale_bits=9)
+[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096, h_scale_bits=9, gains=N)
 ```
 
 If the variable is missing or the file fails to load, the log clearly shows the fallback:
@@ -288,8 +293,10 @@ If the variable is missing or the file fails to load, the log clearly shows the 
 ### 3.5 Replay GUI `.npy` Recordings
 
 The GUI saves CSI-RS snapshots as `channel_*.npy` and SRS snapshots as
-`srs_*.npy`. The values are the same OAI `c16_t` fixed-point estimates, so they
-can be converted to the `.bin` format above without changing the replay engine.
+`srs_*.npy`. The converter writes version-2 `.bin` files: H is normalized to
+the OAI AMP scale for fixed-point stability, and each slot's linear gain is
+stored after the header so the replay engine restores the recorded power.
+Version-1 native recorder files remain supported unchanged.
 
 ```bash
 # CSI-RS GUI snapshots -> multi-slot .bin
@@ -337,7 +344,7 @@ Verify that RFSim loaded the converted file:
 
 ```text
 [HW] [rfsim] Loading channel file: /tmp/csi_rs_channel.bin
-[HW] [rfsim] Loaded SRS channel file: /tmp/csi_rs_channel.bin (N slots, 2x2, fft=2048, h_scale_bits=9)
+[HW] [rfsim] Loaded SRS channel file: /tmp/csi_rs_channel.bin (N slots, 2x2, fft=2048, h_scale_bits=9, gains=N)
 ```
 
 ### 4. Build

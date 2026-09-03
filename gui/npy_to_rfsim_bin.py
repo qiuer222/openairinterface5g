@@ -9,6 +9,11 @@ The GUI saves the same fixed-point channel data as numpy complex arrays:
 This script writes those snapshots into the binary format already consumed by
 radio/rfsimulator/apply_channel_fd.c.  For SRS arrays with multiple symbols the
 first symbol is used, matching the original dump_srs_channel() behavior.
+
+Version 2 files written here normalize every slot's H to the stable OAI AMP
+scale and store one float ``slot_gain_lin`` per slot after the header.  The
+replay engine uses that gain to restore the recorded absolute channel power, so
+path loss in the RFSim channel model remains an independent level control.
 """
 
 from __future__ import annotations
@@ -24,8 +29,11 @@ import numpy as np
 
 
 MAGIC = 0x48534D52
-VERSION = 1
-HEADER_FORMAT = "<IHBBHHIIHHB23x"
+VERSION = 2
+LEGACY_VERSION = 1
+H_SCALE_BITS_DEFAULT = 9
+C16_MAX_AMPLITUDE = 32767.0
+HEADER_FORMAT = "<IHBBHHIIHHBB22x"
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
 
@@ -173,6 +181,30 @@ def load_slots(
     return arrays, nrx, ntx, fft_size
 
 
+def normalize_slot(
+    h: np.ndarray, h_scale_bits: int = H_SCALE_BITS_DEFAULT
+) -> Tuple[np.ndarray, float]:
+    """Return (H scaled to the AMP scale, linear gain restoring raw H).
+
+    A single scalar is used for the whole slot so the time-domain channel
+    impulse response is only amplitude-scaled (zero bins stay zero).  The gain
+    is ``1 / scale``; the replay engine multiplies its fixed-point result by
+    this gain to recover the recorded raw channel level.
+    """
+    mag = np.abs(h)
+    valid = mag > 0
+    if not np.any(valid):
+        return h.astype(np.complex128, copy=True), 1.0
+
+    rms = float(np.sqrt(np.mean(mag[valid] ** 2)))
+    peak = float(np.max(mag[valid]))
+    target_scale = (1 << h_scale_bits) / rms
+    # Never scale a c16 component beyond the 16-bit range.
+    peak_scale = (C16_MAX_AMPLITUDE - 1.0) / peak
+    scale = min(target_scale, peak_scale)
+    return (h * scale).astype(np.complex128, copy=False), 1.0 / scale
+
+
 def channel_to_c16(h: np.ndarray) -> bytes:
     if h.shape[-1] == 0:
         raise ValueError("channel has no subcarriers")
@@ -192,6 +224,7 @@ def make_header(
     scs: int,
     num_slots: int,
     n_symbols: int,
+    h_scale_bits: int = H_SCALE_BITS_DEFAULT,
 ) -> bytes:
     return struct.pack(
         HEADER_FORMAT,
@@ -206,6 +239,7 @@ def make_header(
         fft_size,
         0,
         n_symbols,
+        h_scale_bits,
     )
 
 
@@ -219,9 +253,16 @@ def write_bin(
     nrx, ntx, fft_size = arrays[0].shape
     num_slots = len(arrays)
     n_symbols = 1
+    normalized: List[np.ndarray] = []
+    gains: List[float] = []
+    for h in arrays:
+        h_norm, gain = normalize_slot(h)
+        normalized.append(h_norm)
+        gains.append(gain)
     with open(output, "wb") as fp:
         fp.write(make_header(nrx, ntx, fft_size, n_rb, scs, num_slots, n_symbols))
-        for slot_idx, h in enumerate(arrays):
+        fp.write(struct.pack(f"<{num_slots}f", *gains))
+        for slot_idx, h in enumerate(normalized):
             fp.write(struct.pack("<I", slot_start + slot_idx))
             fp.write(channel_to_c16(h))
     return nrx, ntx, fft_size, num_slots
@@ -242,10 +283,11 @@ def parse_header(header: bytes) -> Dict[str, int]:
         n_sc,
         offset,
         n_symbols,
+        h_scale_bits,
     ) = struct.unpack(HEADER_FORMAT, header)
     if magic != MAGIC:
         raise ValueError(f"bad .bin magic: 0x{magic:08X}")
-    if version != VERSION:
+    if version not in (LEGACY_VERSION, VERSION):
         raise ValueError(f"unsupported .bin version: {version}")
     return {
         "magic": magic,
@@ -259,6 +301,7 @@ def parse_header(header: bytes) -> Dict[str, int]:
         "n_subcarriers": n_sc,
         "subcarrier_offset": offset,
         "n_symbols": n_symbols,
+        "h_scale_bits": h_scale_bits,
     }
 
 
@@ -268,6 +311,7 @@ def verify_bin(
     kind: str = "auto",
     symbol: int = 0,
 ) -> Dict[str, int]:
+    slot_bytes = 0
     with open(path, "rb") as fp:
         header = fp.read(HEADER_SIZE)
         info = parse_header(header)
@@ -277,6 +321,14 @@ def verify_bin(
             * info["n_subcarriers"]
             * 4
         )
+        data_offset = HEADER_SIZE
+        if info["version"] == VERSION:
+            gain_bytes = info["num_slots"] * 4
+            gains = fp.read(gain_bytes)
+            if len(gains) != gain_bytes:
+                raise ValueError("truncated slot-gain array")
+            data_offset += gain_bytes
+        fp.seek(data_offset)
         for slot_idx in range(info["num_slots"]):
             slot_hdr = fp.read(4)
             if len(slot_hdr) != 4:
@@ -311,12 +363,19 @@ def verify_bin(
             )
         with open(path, "rb") as fp:
             fp.seek(HEADER_SIZE)
+            if info["version"] == VERSION:
+                fp.seek(info["num_slots"] * 4, os.SEEK_CUR)
             for slot_idx, h in enumerate(ref_arrays):
                 slot_hdr = fp.read(4)
                 if len(slot_hdr) != 4:
                     raise ValueError(f"truncated slot {slot_idx} during data compare")
                 data = fp.read(slot_bytes)
-                if data != channel_to_c16(h):
+                expected = h
+                if info["version"] == VERSION:
+                    expected, _ = normalize_slot(
+                        h, info["h_scale_bits"] or H_SCALE_BITS_DEFAULT
+                    )
+                if data != channel_to_c16(expected):
                     raise ValueError(f"slot {slot_idx} data does not match reference")
     return info
 
@@ -331,7 +390,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 f"OK {path}: RSMH v{info['version']}, {info['num_slots']} slots, "
                 f"{info['nrx']}x{info['ntx']}, fft={info['fft_size']}, "
                 f"n_rb={info['n_rb']}, scs={info['scs']}, "
-                f"subcarriers={info['n_subcarriers']}, offset={info['subcarrier_offset']}"
+                f"subcarriers={info['n_subcarriers']}, offset={info['subcarrier_offset']}, "
+                f"h_scale_bits={info['h_scale_bits']}"
             )
         return 0
 
@@ -350,12 +410,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     print(
         f"wrote {output}: {num_slots} slots, {nrx}x{ntx}, fft={fft_size}, "
-        f"n_rb={args.n_rb}, scs={args.scs}, source={len(paths)} .npy file(s)"
+        f"n_rb={args.n_rb}, scs={args.scs}, source={len(paths)} .npy file(s), "
+        f"h_scale_bits={H_SCALE_BITS_DEFAULT}"
     )
     info = verify_bin(output)
     print(
         f"verified {output}: RSMH v{info['version']}, {info['num_slots']} slots, "
-        f"{info['nrx']}x{info['ntx']}, fft={info['fft_size']}"
+        f"{info['nrx']}x{info['ntx']}, fft={info['fft_size']}, "
+        f"h_scale_bits={info['h_scale_bits']}"
     )
     return 0
 

@@ -42,7 +42,7 @@ static int resolve_dft(void) {
 // ---- File format (matches recording side) ----
 typedef struct {
   uint32_t magic;              // 0x48534D52
-  uint16_t version;            // 1
+  uint16_t version;            // 1: raw H, 2: normalized H + per-slot gains
   uint8_t  num_rx_ant;
   uint8_t  num_tx_ant;
   uint16_t fft_size;
@@ -71,6 +71,7 @@ static struct {
   int    num_slots;
   int    current_slot;
   c16_t *h_data;   // [num_slots][rx][tx][subcarrier]
+  float *slot_gains;  // [num_slots]; NULL for version-1 files (implicit gain 1.0)
 } srs_replay = {0};
 
 /*
@@ -93,7 +94,15 @@ int rfsim_load_srs_file(const char *path) {
 
   srs_file_header_t hdr;
   if (fread(&hdr, sizeof(hdr), 1, fp) != 1) { fclose(fp); return -1; }
-  if (hdr.magic != 0x48534D52 || hdr.version != 1) { fclose(fp); return -1; }
+  if (hdr.magic != 0x48534D52 || (hdr.version != 1 && hdr.version != 2)) {
+    fclose(fp);
+    return -1;
+  }
+
+  free(srs_replay.h_data);
+  free(srs_replay.slot_gains);
+  srs_replay.h_data = NULL;
+  srs_replay.slot_gains = NULL;
 
   srs_replay.num_rx    = hdr.num_rx_ant;
   srs_replay.num_tx    = hdr.num_tx_ant;
@@ -102,7 +111,13 @@ int rfsim_load_srs_file(const char *path) {
   srs_replay.sc_off    = hdr.subcarrier_offset;
 
   const char *scale_env = getenv("RFSIM_H_SCALE_BITS");
-  int scale_bits = scale_env ? atoi(scale_env) : RFSIM_H_AMP_BITS_DEFAULT;
+  int scale_bits = 0;
+  if (hdr.version == 2 && hdr.reserved[0] != 0)
+    scale_bits = hdr.reserved[0];
+  else if (scale_env)
+    scale_bits = atoi(scale_env);
+  else
+    scale_bits = RFSIM_H_AMP_BITS_DEFAULT;
   if (scale_bits < 1)
     scale_bits = 1;
   if (scale_bits > 15)
@@ -133,8 +148,27 @@ int rfsim_load_srs_file(const char *path) {
     return -1;
   }
 
+  // Version-2 files carry a per-slot linear gain array right after the header.
+  if (hdr.version == 2) {
+    if (skip_count > 0)
+      fseek(fp, skip_count * (long)sizeof(float), SEEK_CUR);
+    srs_replay.slot_gains = calloc(load_count, sizeof(float));
+    if (!srs_replay.slot_gains ||
+        fread(srs_replay.slot_gains, sizeof(float), load_count, fp) != (size_t)load_count) {
+      free(srs_replay.slot_gains);
+      srs_replay.slot_gains = NULL;
+      fclose(fp);
+      return -1;
+    }
+  }
+
   srs_replay.h_data = calloc(load_count * h_per_slot, sizeof(c16_t));
-  if (!srs_replay.h_data) { fclose(fp); return -1; }
+  if (!srs_replay.h_data) {
+    free(srs_replay.slot_gains);
+    srs_replay.slot_gains = NULL;
+    fclose(fp);
+    return -1;
+  }
 
   for (int s = 0; s < load_count; s++) {
     // Skip per-slot header (uint32_t slot_number)
@@ -155,16 +189,19 @@ int rfsim_load_srs_file(const char *path) {
   if (resolve_dft() != 0) {
     fprintf(stderr, "[rfsim] ERROR: cannot resolve DFT function pointers\n");
     free(srs_replay.h_data);
+    free(srs_replay.slot_gains);
     srs_replay.h_data = NULL;
+    srs_replay.slot_gains = NULL;
     return -1;
   }
 
   srs_replay.loaded = 1;
   srs_replay_loaded = 1;
 
-  LOG_I(HW, "[rfsim] Loaded SRS channel file: %s (%d slots, %dx%d, fft=%d, h_scale_bits=%d)\n",
+  LOG_I(HW, "[rfsim] Loaded SRS channel file: %s (%d slots, %dx%d, fft=%d, h_scale_bits=%d, gains=%d)\n",
         path, srs_replay.num_slots, srs_replay.num_rx, srs_replay.num_tx,
-        srs_replay.fft_size, srs_replay.h_amp_bits);
+        srs_replay.fft_size, srs_replay.h_amp_bits,
+        srs_replay.slot_gains ? srs_replay.num_slots : 0);
   return 0;
 }
 
@@ -223,6 +260,12 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
   const int slot_idx = srs_replay.current_slot % srs_replay.num_slots;
   const int h_per_slot = nrx * ntx * n_sc;
   const c16_t *h_slot = srs_replay.h_data + (size_t)slot_idx * h_per_slot;
+  float slot_gain = 1.0f;
+  if (srs_replay.slot_gains) {
+    slot_gain = srs_replay.slot_gains[slot_idx];
+    if (!isfinite(slot_gain) || slot_gain <= 0.0f)
+      slot_gain = 1.0f;
+  }
 
   // Work buffers (static, allocated once at max fft_size).
   // OAI's dft/idft wrappers require 32-byte-aligned output buffers, so use
@@ -300,9 +343,11 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
 
     // Copy block to output. OAI dft/idft already use matched 1/sqrt(N)
     // normalization, so no extra division by fft_size is allowed here.
+    // Version-2 files store normalized H; slot_gain restores the recorded
+    // absolute channel power (version-1 files use slot_gain = 1.0).
     for (int n = 0; n < blk_len; n++) {
-      after_channel_sig[blk_start + n].r += time_buf[n].r;
-      after_channel_sig[blk_start + n].i += time_buf[n].i;
+      after_channel_sig[blk_start + n].r += time_buf[n].r * slot_gain;
+      after_channel_sig[blk_start + n].i += time_buf[n].i * slot_gain;
     }
   }
 

@@ -64,7 +64,7 @@ Both dumps share the same packed format:
 | Offset | Size | Field | Description |
 |--------|------|-------|-------------|
 | 0 | 4 | `magic` | `0x48534D52` (ASCII `"RSMH"`) |
-| 4 | 2 | `version` | `1` |
+| 4 | 2 | `version` | `1`: raw H (native recorders); `2`: normalized H + per-slot gains (GUI converter) |
 | 6 | 1 | `num_rx_ant` | RX antennas |
 | 7 | 1 | `num_tx_ant` | TX ports |
 | 8 | 2 | `fft_size` | OFDM symbol size |
@@ -74,7 +74,8 @@ Both dumps share the same packed format:
 | 20 | 2 | `n_subcarriers` | Stored subcarriers (typically `fft_size`) |
 | 22 | 2 | `subcarrier_offset` | DC offset |
 | 24 | 1 | `n_srs_symbols` / `n_csi_symbols` | Symbol count |
-| 25 | 23 | `reserved` | Padding |
+| 25 | 1 | `h_scale_bits` | H AMP scale used by version-2 files (9 in this build); 0 for version-1 files |
+| 26 | 22 | `reserved` | Padding |
 
 ### Per-Slot Record
 
@@ -118,14 +119,14 @@ Expected logs:
 
 ```
 [HW] [rfsim] Loading channel file: /tmp/srs_channel.bin
-[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096, h_scale_bits=9)
+[HW] [rfsim] Loaded SRS channel file: /tmp/srs_channel.bin (N slots, 1x2, fft=4096, h_scale_bits=9, gains=N)
 ```
 
 ### Replaying GUI `.npy` Recordings
 
 The GUI saves CSI-RS snapshots as `channel_*.npy` and SRS snapshots as
-`srs_*.npy`. Convert them to the same `.bin` format before setting
-`CHANNEL_FILE`:
+`srs_*.npy`. Convert them to version-2 `.bin` files (normalized H plus
+per-slot gain metadata) before setting `CHANNEL_FILE`:
 
 ```bash
 .venv/bin/python gui/npy_to_rfsim_bin.py \
