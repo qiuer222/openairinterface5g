@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert GUI SRS/CSI-RS channel snapshots to RFSim replay .bin files.
+"""Convert GUI SRS/CSI-RS snapshots to sparse RFSim time-domain replay files.
 
 The GUI saves the same fixed-point channel data as numpy complex arrays:
 
@@ -10,10 +10,9 @@ This script writes those snapshots into the binary format already consumed by
 radio/rfsimulator/apply_channel_fd.c.  For SRS arrays with multiple symbols the
 first symbol is used, matching the original dump_srs_channel() behavior.
 
-Version 2 files written here normalize every slot's H to the stable OAI AMP
-scale and store one float ``slot_gain_lin`` per slot after the header.  The
-replay engine uses that gain to restore the recorded absolute channel power, so
-path loss in the RFSim channel model remains an independent level control.
+The converter estimates a compact time-domain impulse response per rx/tx path,
+prunes weak taps, and writes an RSMH v3 file containing sparse ``(delay, tap)``
+records. RFSim convolves these taps directly with the received sample stream.
 """
 
 from __future__ import annotations
@@ -29,12 +28,13 @@ import numpy as np
 
 
 MAGIC = 0x48534D52
-VERSION = 2
-VERSION_TIME_DOMAIN = 3
-LEGACY_VERSION = 1
-H_SCALE_BITS_DEFAULT = 9
+FORMAT_VERSION = 3
+AMP_SCALE_BITS = 9  # OAI reference amplitude: AMP == 1 << AMP_SCALE_BITS
 TAP_SCALE_BITS_DEFAULT = 15
 TAP_LEN_DEFAULT = 32
+MAX_ACTIVE_TAPS_DEFAULT = 8
+MAX_ACTIVE_TAPS_LIMIT = 64
+TAP_PRUNING_DB = -20  # keep taps within 20 dB of the strongest recorded tap
 TAP_REGULARIZATION = 1e-2
 C16_MAX_AMPLITUDE = 32767.0
 HEADER_FORMAT = "<IHBBHHIIHHBB22x"
@@ -101,17 +101,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         type=int,
         default=-1,
         help=(
-            "Subcarrier offset stored in the RSMH header. Default: FFT/2 for "
-            "SRS recordings, 0 for CSI-RS recordings."
-        ),
-    )
-    parser.add_argument(
-        "--time-domain",
-        action="store_true",
-        help=(
-            "Write a version-3 RSMH file containing time-domain impulse taps "
-            "instead of frequency-domain H. RFSim then uses linear convolution "
-            "instead of block DFT/IDFT filtering."
+            "Spectral offset used while fitting taps. Default: FFT/2 for SRS "
+            "recordings, first carrier offset for CSI-RS."
         ),
     )
     parser.add_argument(
@@ -121,6 +112,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help=f"Number of time-domain taps estimated per path (default: {TAP_LEN_DEFAULT}).",
     )
     parser.add_argument(
+        "--max-active-taps",
+        type=int,
+        default=MAX_ACTIVE_TAPS_DEFAULT,
+        help=(
+            "Maximum sparse taps kept per rx/tx path "
+            f"(default: {MAX_ACTIVE_TAPS_DEFAULT}, max: {MAX_ACTIVE_TAPS_LIMIT})."
+        ),
+    )
+    parser.add_argument(
         "--verify",
         action="store_true",
         help="Verify .bin header/slot layout instead of converting.",
@@ -128,10 +128,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--reference",
         nargs="+",
-        help=(
-            "With --verify, source .npy files/directories whose c16_t values "
-            "must match the .bin slots. Put --reference after the .bin path."
-        ),
+        help="Reserved for compatibility; sparse tap files are verified structurally.",
     )
     return parser.parse_args(argv)
 
@@ -227,31 +224,7 @@ def load_slots(
     return arrays, nrx, ntx, fft_size
 
 
-def normalize_slot(
-    h: np.ndarray, h_scale_bits: int = H_SCALE_BITS_DEFAULT
-) -> Tuple[np.ndarray, float]:
-    """Return (H scaled to the AMP scale, linear gain restoring raw H).
-
-    A single scalar is used for the whole slot so the time-domain channel
-    impulse response is only amplitude-scaled (zero bins stay zero).  The gain
-    is ``1 / scale``; the replay engine multiplies its fixed-point result by
-    this gain to recover the recorded raw channel level.
-    """
-    mag = np.abs(h)
-    valid = mag > 0
-    if not np.any(valid):
-        return h.astype(np.complex128, copy=True), 1.0
-
-    rms = float(np.sqrt(np.mean(mag[valid] ** 2)))
-    peak = float(np.max(mag[valid]))
-    target_scale = (1 << h_scale_bits) / rms
-    # Never scale a c16 component beyond the 16-bit range.
-    peak_scale = (C16_MAX_AMPLITUDE - 1.0) / peak
-    scale = min(target_scale, peak_scale)
-    return (h * scale).astype(np.complex128, copy=False), 1.0 / scale
-
-
-def fit_time_taps(
+def _fit_dense_taps(
     h: np.ndarray,
     fft_size: int,
     subcarrier_offset: int,
@@ -265,8 +238,8 @@ def fit_time_taps(
     almost flat (a plain IDFT would generate a long sinc-like response because
     out-of-band bins are unknown/zero).
 
-    Returns taps shaped (nrx, ntx, tap_len), in the same linear scale as
-    ``h / AMP``.
+    Returns dense taps shaped (nrx, ntx, tap_len), in the same linear scale
+    as ``h / AMP``.
     """
     nrx, ntx, n_sc = h.shape
     saved_idx = np.nonzero(np.abs(h).sum(axis=(0, 1)) > 0)[0]
@@ -283,16 +256,43 @@ def fit_time_taps(
     taps = np.zeros((nrx, ntx, tap_len), dtype=np.complex128)
     for rx in range(nrx):
         for tx in range(ntx):
-            y = h[rx, tx, saved_idx] / float(1 << H_SCALE_BITS_DEFAULT)
+            y = h[rx, tx, saved_idx] / float(1 << AMP_SCALE_BITS)
             if np.max(np.abs(y)) == 0:
                 continue
             taps[rx, tx] = np.linalg.solve(gram, rhs @ y)
     return taps
 
 
-def taps_to_c16(taps: np.ndarray, tap_scale_bits: int = TAP_SCALE_BITS_DEFAULT) -> np.ndarray:
-    """Scale complex taps into the c16 range for RFSim's c16mulShift() path."""
-    return (taps * (1 << tap_scale_bits)).astype(np.complex128)
+def sparse_taps_for_slot(
+    h: np.ndarray,
+    fft_size: int,
+    subcarrier_offset: int,
+    tap_len: int = TAP_LEN_DEFAULT,
+    max_active_taps: int = MAX_ACTIVE_TAPS_DEFAULT,
+    prune_db: float = TAP_PRUNING_DB,
+) -> List[List[List[Tuple[int, complex]]]]:
+    """Return sparse per-path taps ``[rx][tx][(delay, tap)]``."""
+    dense = _fit_dense_taps(
+        h, fft_size, subcarrier_offset, tap_len=tap_len
+    )
+    threshold_lin = 10.0 ** (prune_db / 20.0)
+    nrx, ntx, _ = dense.shape
+    global_peak = float(np.max(np.abs(dense))) if dense.size else 0.0
+    if global_peak <= 0.0:
+        return [[[] for _ in range(ntx)] for _ in range(nrx)]
+    result: List[List[List[Tuple[int, complex]]]] = []
+    for rx in range(nrx):
+        tx_paths: List[List[Tuple[int, complex]]] = []
+        for tx in range(ntx):
+            taps = dense[rx, tx]
+            amps = np.abs(taps)
+            keep = np.where(amps >= global_peak * threshold_lin)[0]
+            # Keep the strongest taps first, capped to keep runtime bounded.
+            keep = keep[np.argsort(-amps[keep])][:max_active_taps]
+            keep = np.sort(keep)
+            tx_paths.append([(int(delay), complex(taps[delay])) for delay in keep])
+        result.append(tx_paths)
+    return result
 
 
 def channel_to_c16(h: np.ndarray) -> bytes:
@@ -313,61 +313,26 @@ def make_header(
     n_rb: int,
     scs: int,
     num_slots: int,
-    n_symbols: int,
-    h_scale_bits: int = H_SCALE_BITS_DEFAULT,
-    subcarrier_offset: int = 0,
-    version: int = VERSION,
-    n_subcarriers: Optional[int] = None,
+    max_active_taps: int,
 ) -> bytes:
-    if n_subcarriers is None:
-        n_subcarriers = fft_size
     return struct.pack(
         HEADER_FORMAT,
         MAGIC,
-        version,
+        FORMAT_VERSION,
         nrx,
         ntx,
         fft_size,
         n_rb,
         scs,
         num_slots,
-        n_subcarriers,
-        subcarrier_offset,
-        n_symbols,
-        h_scale_bits,
+        max_active_taps,
+        0,
+        1,
+        TAP_SCALE_BITS_DEFAULT,
     )
 
 
-def write_bin(
-    output: str,
-    arrays: Sequence[np.ndarray],
-    n_rb: int,
-    scs: int,
-    slot_start: int,
-    subcarrier_offset: int = 0,
-) -> Tuple[int, int, int, int]:
-    nrx, ntx, fft_size = arrays[0].shape
-    num_slots = len(arrays)
-    n_symbols = 1
-    normalized: List[np.ndarray] = []
-    gains: List[float] = []
-    for h in arrays:
-        h_norm, gain = normalize_slot(h)
-        normalized.append(h_norm)
-        gains.append(gain)
-    with open(output, "wb") as fp:
-        fp.write(make_header(
-            nrx, ntx, fft_size, n_rb, scs, num_slots, n_symbols,
-            subcarrier_offset=subcarrier_offset,
-        ))
-        fp.write(struct.pack(f"<{num_slots}f", *gains))
-        for slot_idx, h in enumerate(normalized):
-            fp.write(struct.pack("<I", slot_start + slot_idx))
-            fp.write(channel_to_c16(h))
-    return nrx, ntx, fft_size, num_slots
-
-
-def write_bin_td(
+def write_sparse_taps(
     output: str,
     arrays: Sequence[np.ndarray],
     fft_size: int,
@@ -376,15 +341,21 @@ def write_bin_td(
     slot_start: int,
     subcarrier_offset: int,
     tap_len: int,
+    max_active_taps: int,
 ) -> Tuple[int, int, int, int]:
-    """Write a version-3 file: per-path time-domain taps instead of H."""
+    """Write the current RSMH format: sparse time-domain taps per path."""
     nrx, ntx, _ = arrays[0].shape
     num_slots = len(arrays)
-    tap_arrays = []
-    for h in arrays:
-        tap_arrays.append(
-            fit_time_taps(h, fft_size, subcarrier_offset, tap_len)
+    sparse_arrays = [
+        sparse_taps_for_slot(
+            h,
+            fft_size,
+            subcarrier_offset,
+            tap_len=tap_len,
+            max_active_taps=max_active_taps,
         )
+        for h in arrays
+    ]
 
     with open(output, "wb") as fp:
         fp.write(make_header(
@@ -394,16 +365,18 @@ def write_bin_td(
             n_rb,
             scs,
             num_slots,
-            1,
-            h_scale_bits=TAP_SCALE_BITS_DEFAULT,
-            subcarrier_offset=subcarrier_offset,
-            version=VERSION_TIME_DOMAIN,
-            n_subcarriers=tap_len,
+            max_active_taps,
         ))
-        for slot_idx, taps in enumerate(tap_arrays):
+        for slot_idx, paths in enumerate(sparse_arrays):
             fp.write(struct.pack("<I", slot_start + slot_idx))
-            scaled = taps_to_c16(taps)
-            fp.write(channel_to_c16(scaled))
+            for rx in range(nrx):
+                for tx in range(ntx):
+                    active = paths[rx][tx]
+                    fp.write(struct.pack("<H", len(active)))
+                    for delay, tap in active:
+                        fp.write(struct.pack("<H", delay))
+                        scaled = tap * (1 << TAP_SCALE_BITS_DEFAULT)
+                        fp.write(channel_to_c16(np.asarray([scaled])))
     return nrx, ntx, fft_size, num_slots
 
 
@@ -426,8 +399,10 @@ def parse_header(header: bytes) -> Dict[str, int]:
     ) = struct.unpack(HEADER_FORMAT, header)
     if magic != MAGIC:
         raise ValueError(f"bad .bin magic: 0x{magic:08X}")
-    if version not in (LEGACY_VERSION, VERSION, VERSION_TIME_DOMAIN):
-        raise ValueError(f"unsupported .bin version: {version}")
+    if version != FORMAT_VERSION:
+        raise ValueError(
+            f"unsupported .bin version {version}, expected {FORMAT_VERSION}"
+        )
     return {
         "magic": magic,
         "version": version,
@@ -451,72 +426,41 @@ def verify_bin(
     symbol: int = 0,
     transpose: bool = False,
 ) -> Dict[str, int]:
-    slot_bytes = 0
     with open(path, "rb") as fp:
         header = fp.read(HEADER_SIZE)
         info = parse_header(header)
-        slot_bytes = (
-            info["nrx"]
-            * info["ntx"]
-            * info["n_subcarriers"]
-            * 4
-        )
-        data_offset = HEADER_SIZE
-        if info["version"] == VERSION:
-            gain_bytes = info["num_slots"] * 4
-            gains = fp.read(gain_bytes)
-            if len(gains) != gain_bytes:
-                raise ValueError("truncated slot-gain array")
-            data_offset += gain_bytes
-        fp.seek(data_offset)
         for slot_idx in range(info["num_slots"]):
-            slot_hdr = fp.read(4)
-            if len(slot_hdr) != 4:
+            if len(fp.read(4)) != 4:
                 raise ValueError(
                     f"truncated slot {slot_idx}: missing 4-byte slot number"
                 )
-            data = fp.read(slot_bytes)
-            if len(data) != slot_bytes:
-                raise ValueError(
-                    f"truncated slot {slot_idx}: expected {slot_bytes} bytes, got {len(data)}"
-                )
+            for _ in range(info["nrx"] * info["ntx"]):
+                count = fp.read(2)
+                if len(count) != 2:
+                    raise ValueError(
+                        f"truncated slot {slot_idx}: missing tap count"
+                    )
+                count = struct.unpack("<H", count)[0]
+                if count > info["n_subcarriers"]:
+                    raise ValueError(
+                        f"slot {slot_idx} path has {count} taps, "
+                        f"header allows {info['n_subcarriers']}"
+                    )
+                for _ in range(count):
+                    if len(fp.read(2 + 4)) != 6:
+                        raise ValueError(
+                            f"truncated slot {slot_idx}: missing tap record"
+                        )
         if fp.read(1):
             raise ValueError(f"trailing bytes after {info['num_slots']} slots")
 
     if references:
-        ref_paths, ref_kind = expand_inputs(references, kind)
-        ref_arrays, ref_nrx, ref_ntx, ref_fft = load_slots(
-            ref_paths, ref_kind, symbol, transpose=transpose
+        # Frequency-domain references require the same sparse estimation that
+        # was used to create the file. Callers can rely on structural verify;
+        # a comparison needs tap_len/max_active_taps, which are not recorded.
+        raise ValueError(
+            "--reference comparison is not available for sparse tap files"
         )
-        if len(ref_arrays) != info["num_slots"]:
-            raise ValueError(
-                f"reference has {len(ref_arrays)} slots, .bin has {info['num_slots']}"
-            )
-        if (ref_nrx, ref_ntx, ref_fft) != (
-            info["nrx"],
-            info["ntx"],
-            info["fft_size"],
-        ):
-            raise ValueError(
-                f"reference dimensions {(ref_nrx, ref_ntx, ref_fft)} "
-                f"do not match .bin {(info['nrx'], info['ntx'], info['fft_size'])}"
-            )
-        with open(path, "rb") as fp:
-            fp.seek(HEADER_SIZE)
-            if info["version"] == VERSION:
-                fp.seek(info["num_slots"] * 4, os.SEEK_CUR)
-            for slot_idx, h in enumerate(ref_arrays):
-                slot_hdr = fp.read(4)
-                if len(slot_hdr) != 4:
-                    raise ValueError(f"truncated slot {slot_idx} during data compare")
-                data = fp.read(slot_bytes)
-                expected = h
-                if info["version"] == VERSION:
-                    expected, _ = normalize_slot(
-                        h, info["h_scale_bits"] or H_SCALE_BITS_DEFAULT
-                    )
-                if data != channel_to_c16(expected):
-                    raise ValueError(f"slot {slot_idx} data does not match reference")
     return info
 
 
@@ -548,6 +492,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     output = args.output
     if output is None:
         output = "/tmp/srs_channel.bin" if kind == "srs" else "/tmp/csi_rs_channel.bin"
+    if not (1 <= args.max_active_taps <= MAX_ACTIVE_TAPS_LIMIT):
+        raise ValueError(
+            f"--max-active-taps must be between 1 and {MAX_ACTIVE_TAPS_LIMIT}"
+        )
 
     # OAI's SRS channel estimator returns H in a coordinate system shifted by
     # half the FFT relative to the RX FFT bins used by the RFSim replay path.
@@ -556,33 +504,27 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.subcarrier_offset >= 0:
         subcarrier_offset = args.subcarrier_offset
     else:
-        subcarrier_offset = fft_size // 2 if kind == "srs" else 0
-    if args.time_domain:
-        _, _, _, num_slots = write_bin_td(
-            output,
-            arrays,
-            fft_size,
-            args.n_rb,
-            args.scs,
-            args.slot_start,
-            subcarrier_offset,
-            args.tap_len,
-        )
-    else:
-        _, _, _, num_slots = write_bin(
-            output,
-            arrays,
-            args.n_rb,
-            args.scs,
-            args.slot_start,
-            subcarrier_offset,
-        )
+        if kind == "srs":
+            subcarrier_offset = fft_size // 2
+        else:
+            subcarrier_offset = fft_size - (args.n_rb * 12 // 2)
+    _, _, _, num_slots = write_sparse_taps(
+        output,
+        arrays,
+        fft_size,
+        args.n_rb,
+        args.scs,
+        args.slot_start,
+        subcarrier_offset,
+        args.tap_len,
+        args.max_active_taps,
+    )
     print(
         f"wrote {output}: {num_slots} slots, {nrx}x{ntx}, fft={fft_size}, "
         f"n_rb={args.n_rb}, scs={args.scs}, source={len(paths)} .npy file(s), "
-        f"h_scale_bits={H_SCALE_BITS_DEFAULT}, offset={subcarrier_offset}"
+        f"tap_scale_bits={TAP_SCALE_BITS_DEFAULT}"
         + (", transposed=rx<->tx" if args.transpose else "")
-        + (f", time-domain taps={args.tap_len}" if args.time_domain else "")
+        + f", ls_taps={args.tap_len}, max_active_taps={args.max_active_taps}"
     )
     info = verify_bin(output)
     print(

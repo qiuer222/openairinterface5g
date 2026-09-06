@@ -8,7 +8,7 @@
 void rxAddInput(c16_t **input_sig, cf_t *after_channel_sig, int rxAnt, channel_desc_t *channelDesc, int nbSamples);
 void update_channel_model(channel_desc_t *channelDesc, int nbSamples, uint64_t TS);
 
-/* SRS file replay */
+/* Recorded-channel replay (time-domain taps) */
 int  rfsim_load_srs_file(const char *path);
 void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
                          int rxAnt, channel_desc_t *channelDesc, int nbSamples);
