@@ -42,7 +42,7 @@ static int resolve_dft(void) {
 // ---- File format (matches recording side) ----
 typedef struct {
   uint32_t magic;              // 0x48534D52
-  uint16_t version;            // 1: raw H, 2: normalized H + per-slot gains
+  uint16_t version;            // 1: raw H, 2: normalized H + gains, 3: time-domain taps
   uint8_t  num_rx_ant;
   uint8_t  num_tx_ant;
   uint16_t fft_size;
@@ -67,6 +67,7 @@ static struct {
   int    fft_size;
   int    n_sc;
   int    sc_off;
+  int    time_domain;
   int    h_amp_bits;  /* fixed-point scale of recorded H: unit gain == 2^h_amp_bits */
   int    num_slots;
   int    current_slot;
@@ -94,7 +95,8 @@ int rfsim_load_srs_file(const char *path) {
 
   srs_file_header_t hdr;
   if (fread(&hdr, sizeof(hdr), 1, fp) != 1) { fclose(fp); return -1; }
-  if (hdr.magic != 0x48534D52 || (hdr.version != 1 && hdr.version != 2)) {
+  if (hdr.magic != 0x48534D52 ||
+      (hdr.version != 1 && hdr.version != 2 && hdr.version != 3)) {
     fclose(fp);
     return -1;
   }
@@ -109,10 +111,11 @@ int rfsim_load_srs_file(const char *path) {
   srs_replay.fft_size  = hdr.fft_size;
   srs_replay.n_sc      = hdr.n_subcarriers;
   srs_replay.sc_off    = hdr.subcarrier_offset;
+  srs_replay.time_domain = (hdr.version == 3);
 
   const char *scale_env = getenv("RFSIM_H_SCALE_BITS");
   int scale_bits = 0;
-  if (hdr.version == 2 && hdr.reserved[0] != 0)
+  if ((hdr.version == 2 || hdr.version == 3) && hdr.reserved[0] != 0)
     scale_bits = hdr.reserved[0];
   else if (scale_env)
     scale_bits = atoi(scale_env);
@@ -184,25 +187,77 @@ int rfsim_load_srs_file(const char *path) {
     LOG_I(HW, "[rfsim] Skipped %d old slots, loaded last %d of %d recorded\n", skip_count, load_count, total_slots);
   }
 
-  // Resolve DFT function pointers first: dft/idft are function-pointer variables,
-  // so dlsym gives their address and the actual pointer must be dereferenced.
-  if (resolve_dft() != 0) {
-    fprintf(stderr, "[rfsim] ERROR: cannot resolve DFT function pointers\n");
-    free(srs_replay.h_data);
-    free(srs_replay.slot_gains);
-    srs_replay.h_data = NULL;
-    srs_replay.slot_gains = NULL;
-    return -1;
+  if (!srs_replay.time_domain) {
+    // Resolve DFT function pointers first: dft/idft are function-pointer
+    // variables, so dlsym gives their address and the actual pointer must be
+    // dereferenced.
+    if (resolve_dft() != 0) {
+      fprintf(stderr, "[rfsim] ERROR: cannot resolve DFT function pointers\n");
+      free(srs_replay.h_data);
+      free(srs_replay.slot_gains);
+      srs_replay.h_data = NULL;
+      srs_replay.slot_gains = NULL;
+      return -1;
+    }
   }
 
   srs_replay.loaded = 1;
   srs_replay_loaded = 1;
 
-  LOG_I(HW, "[rfsim] Loaded SRS channel file: %s (%d slots, %dx%d, fft=%d, h_scale_bits=%d, gains=%d)\n",
+  LOG_I(HW, "[rfsim] Loaded SRS channel file: %s (%d slots, %dx%d, fft=%d, %s=%d, h_scale_bits=%d, gains=%d)\n",
         path, srs_replay.num_slots, srs_replay.num_rx, srs_replay.num_tx,
-        srs_replay.fft_size, srs_replay.h_amp_bits,
+        srs_replay.fft_size,
+        srs_replay.time_domain ? "taps" : "subcarriers",
+        srs_replay.n_sc, srs_replay.h_amp_bits,
         srs_replay.slot_gains ? srs_replay.num_slots : 0);
   return 0;
+}
+
+// ---- Apply function for version-3 files: direct time-domain convolution ----
+static void apply_time_taps(c16_t **input_sig,
+                            cf_t *after_channel_sig,
+                            int rxAnt,
+                            channel_desc_t *channelDesc,
+                            int nbSamples,
+                            const c16_t *h_slot)
+{
+  const int nrx = srs_replay.num_rx;
+  const int ntx = srs_replay.num_tx;
+  const int ntaps = srs_replay.n_sc;
+  const int shift = srs_replay.h_amp_bits;
+
+  memset(after_channel_sig, 0, nbSamples * sizeof(cf_t));
+
+  for (int n = 0; n < nbSamples; n++) {
+    double acc_r = 0.0;
+    double acc_i = 0.0;
+
+    for (int ta = 0; ta < ntx; ta++) {
+      const c16_t *taps = h_slot + ((size_t)rxAnt * ntx + ta) * ntaps;
+      const int max_l = n < ntaps ? n + 1 : ntaps;
+      for (int l = 0; l < max_l; l++) {
+        const c16_t x = input_sig[ta][n - l];
+        const c16_t h = taps[l];
+        acc_r += ((double)x.r * h.r - (double)x.i * h.i) / (double)(1 << shift);
+        acc_i += ((double)x.r * h.i + (double)x.i * h.r) / (double)(1 << shift);
+      }
+    }
+
+    after_channel_sig[n].r += acc_r;
+    after_channel_sig[n].i += acc_i;
+  }
+
+  const double pathLossLinear = pow(10, channelDesc->path_loss_dB / 20.0);
+  const double noise_per_sample = pow(10, channelDesc->noise_power_dB / 10.0) * 256;
+  for (int n = 0; n < nbSamples; n++) {
+    after_channel_sig[n].r *= pathLossLinear;
+    after_channel_sig[n].i *= pathLossLinear;
+    after_channel_sig[n].r += noise_per_sample * gaussZiggurat(0.0, 1.0);
+    after_channel_sig[n].i += noise_per_sample * gaussZiggurat(0.0, 1.0);
+  }
+
+  if (rxAnt == nrx - 1)
+    srs_replay.current_slot++;
 }
 
 // ---- Apply function: replaces rxAddInput() for recorded channel ----
@@ -227,6 +282,18 @@ void rxAddInput_srsfile(c16_t **input_sig, cf_t *after_channel_sig,
 
   if (!srs_replay.loaded) {
     rxAddInput(input_sig, after_channel_sig, rxAnt, channelDesc, nbSamples);
+    return;
+  }
+
+  if (srs_replay.time_domain) {
+    if (rxAnt >= srs_replay.num_rx || srs_replay.num_slots <= 0) {
+      memset(after_channel_sig, 0, nbSamples * sizeof(cf_t));
+      return;
+    }
+    const int slot_idx = srs_replay.current_slot % srs_replay.num_slots;
+    const int h_per_slot = srs_replay.num_rx * srs_replay.num_tx * srs_replay.n_sc;
+    const c16_t *h_slot = srs_replay.h_data + (size_t)slot_idx * h_per_slot;
+    apply_time_taps(input_sig, after_channel_sig, rxAnt, channelDesc, nbSamples, h_slot);
     return;
   }
 
