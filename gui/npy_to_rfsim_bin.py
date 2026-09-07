@@ -19,12 +19,26 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import struct
 import sys
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+try:
+    from gui.channel_metrics import (
+        channel_metrics,
+        save_channel_analysis_figures,
+        tap_report,
+    )
+except ModuleNotFoundError:
+    from channel_metrics import (
+        channel_metrics,
+        save_channel_analysis_figures,
+        tap_report,
+    )
 
 
 MAGIC = 0x48534D52
@@ -124,6 +138,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--verify",
         action="store_true",
         help="Verify .bin header/slot layout instead of converting.",
+    )
+    parser.add_argument(
+        "--analysis-dir",
+        default=None,
+        help="Optional directory for channel-analysis JSON and PNG figures.",
     )
     parser.add_argument(
         "--reference",
@@ -342,20 +361,22 @@ def write_sparse_taps(
     subcarrier_offset: int,
     tap_len: int,
     max_active_taps: int,
+    sparse_arrays: Optional[List[List[List[List[Tuple[int, complex]]]]]] = None,
 ) -> Tuple[int, int, int, int]:
     """Write the current RSMH format: sparse time-domain taps per path."""
     nrx, ntx, _ = arrays[0].shape
     num_slots = len(arrays)
-    sparse_arrays = [
-        sparse_taps_for_slot(
-            h,
-            fft_size,
-            subcarrier_offset,
-            tap_len=tap_len,
-            max_active_taps=max_active_taps,
-        )
-        for h in arrays
-    ]
+    if sparse_arrays is None:
+        sparse_arrays = [
+            sparse_taps_for_slot(
+                h,
+                fft_size,
+                subcarrier_offset,
+                tap_len=tap_len,
+                max_active_taps=max_active_taps,
+            )
+            for h in arrays
+        ]
 
     with open(output, "wb") as fp:
         fp.write(make_header(
@@ -464,6 +485,16 @@ def verify_bin(
     return info
 
 
+def _json_default(value):
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    return str(value)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
 
@@ -508,6 +539,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             subcarrier_offset = fft_size // 2
         else:
             subcarrier_offset = fft_size - (args.n_rb * 12 // 2)
+
+    sparse_arrays = [
+        sparse_taps_for_slot(
+            h,
+            fft_size,
+            subcarrier_offset,
+            tap_len=args.tap_len,
+            max_active_taps=args.max_active_taps,
+        )
+        for h in arrays
+    ]
     _, _, _, num_slots = write_sparse_taps(
         output,
         arrays,
@@ -518,6 +560,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         subcarrier_offset,
         args.tap_len,
         args.max_active_taps,
+        sparse_arrays,
     )
     print(
         f"wrote {output}: {num_slots} slots, {nrx}x{ntx}, fft={fft_size}, "
@@ -526,6 +569,66 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         + (", transposed=rx<->tx" if args.transpose else "")
         + f", ls_taps={args.tap_len}, max_active_taps={args.max_active_taps}"
     )
+
+    # ---- input channel inspection (always printed; optional files) ----
+    summaries = [channel_metrics(h) for h in arrays]
+    tap_summaries = [
+        tap_report(h, paths_per_slot, fft_size, subcarrier_offset)
+        for h, paths_per_slot in zip(arrays, sparse_arrays)
+    ]
+
+    print("channel analysis:")
+    for slot_idx, (summary, taps) in enumerate(zip(summaries, tap_summaries)):
+        active = summary["active_count"]
+        path_amp = ", ".join(
+            f"rx{p['rx']}-tx{p['tx']}:{p['rms']:.1f}"
+            for p in summary["per_path"]
+        )
+        cond = summary["condition_stats"]["mean"]
+        ranks = ",".join(f"{k}:{v}" for k, v in summary["rank_counts"].items())
+        print(
+            f"  slot {slot_idx}: active={active} "
+            f"[{summary['active_first']}..{summary['active_last']}] "
+            f"rms=({path_amp}) cond_mean={cond:.2f} rank={ranks}"
+        )
+        if slot_idx == 0 or num_slots == 1:
+            print("  taps (first path list):")
+            for tap in taps:
+                if tap["active_taps"]:
+                    delays = ",".join(map(str, tap["delays"]))
+                    mags = ",".join(f"{m:.3f}" for m in tap["magnitudes"])
+                    print(
+                        f"    rx{tap['rx']} tx{tap['tx']}: n={tap['active_taps']} "
+                        f"delays=[{delays}] |tap|=[{mags}] "
+                        f"fit_rmse={tap['frequency_fit_rmse']:.4f}"
+                    )
+                else:
+                    print(f"    rx{tap['rx']} tx{tap['tx']}: no active taps")
+
+    if args.analysis_dir:
+        os.makedirs(args.analysis_dir, exist_ok=True)
+        report = {
+            "kind": kind,
+            "source_paths": paths,
+            "tap_len": args.tap_len,
+            "max_active_taps": args.max_active_taps,
+            "subcarrier_offset": subcarrier_offset,
+            "slots": summaries,
+            "taps": tap_summaries,
+            "bin": output,
+        }
+        report_path = os.path.join(args.analysis_dir, "conversion_channel_analysis.json")
+        with open(report_path, "w") as fp:
+            json.dump(report, fp, indent=2, default=_json_default)
+        print(f"wrote {report_path}")
+        figures = save_channel_analysis_figures(
+            arrays[0],
+            os.path.join(args.analysis_dir, "figures"),
+            "conversion",
+        )
+        for figure in figures:
+            print(f"wrote {figure}")
+
     info = verify_bin(output)
     print(
         f"verified {output}: RSMH v{info['version']}, {info['num_slots']} slots, "
