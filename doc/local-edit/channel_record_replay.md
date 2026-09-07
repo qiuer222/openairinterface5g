@@ -122,6 +122,40 @@ Converter options:
 | `--max-active-taps` | 8 | Maximum taps retained per rx/tx path |
 | `--transpose` | off | Swap rx/tx for reciprocal replay on the opposite side |
 | `--subcarrier-offset` | auto | Spectral offset used during tap fitting |
+| `--analysis-dir` | off | Write channel-analysis JSON and PNG figures to a directory |
+
+## Converter input analysis
+
+Every conversion prints a channel inspection before writing the `.bin`:
+
+- active subcarrier count/range and per-path RMS,
+- per-subcarrier SVD/condition/rank summary,
+- retained sparse taps per rx/tx path with delays, magnitudes and frequency fit error.
+
+For multi-slot conversions the console prints per-slot summaries for all slots
+and full tap details for the first slot. The optional `--analysis-dir` saves
+the full JSON for every slot plus magnitude/singular-value figures.
+
+Example with report files:
+
+```bash
+.venv/bin/python gui/npy_to_rfsim_bin.py \
+  --kind srs --n-rb 106 --scs 30000 \
+  gui/record/gnb_log_20260806_212400/srs_20260806_212401_061474.npy \
+  --output /tmp/srs_channel.bin \
+  --analysis-dir /tmp/channel_analysis
+```
+
+Example console output:
+
+```text
+slot 0: active=1248 [388..1635]
+  rx0-tx0: active taps=1, delay=[0], |tap|=[0.989], fit_rmse=0.0095
+  rx0-tx1: active taps=1, delay=[0], |tap|=[0.202], fit_rmse=0.0564
+```
+
+See [channel_inspection_comparison.md](channel_inspection_comparison.md) for
+the full metric descriptions and the comparison CLI.
 
 ## Replay usage
 
@@ -181,6 +215,8 @@ sudo ./build_oai -w USRP --ninja --nrUE --gNB
 | File | Role |
 |------|------|
 | `gui/npy_to_rfsim_bin.py` | Convert `srs_*.npy` / `channel_*.npy` to sparse tap RSMH files |
+| `gui/channel_metrics.py` | Shared channel SVD/tap/comparison metrics and figures |
+| `gui/compare_channels.py` | Compare two same-kind channel recordings |
 | `radio/rfsimulator/apply_channel_fd.c` | Sparse tap loader and linear convolution replay |
 | `radio/rfsimulator/rfsimulator.h` | Replay interface |
 | `openair1/SCHED_NR/phy_procedures_nr_gNB.c` | SRS record call site |

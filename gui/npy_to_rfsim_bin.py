@@ -592,7 +592,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"rms=({path_amp}) cond_mean={cond:.2f} rank={ranks}"
         )
         if slot_idx == 0 or num_slots == 1:
-            print("  taps (first path list):")
+            print("  tap details (shown for first slot):")
             for tap in taps:
                 if tap["active_taps"]:
                     delays = ",".join(map(str, tap["delays"]))
