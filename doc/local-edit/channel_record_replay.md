@@ -123,6 +123,23 @@ Converter options:
 | `--transpose` | off | Swap rx/tx for reciprocal replay on the opposite side |
 | `--subcarrier-offset` | auto | Spectral offset used during tap fitting |
 | `--analysis-dir` | off | Write channel-analysis JSON and PNG figures to a directory |
+| `--exact-taps` | off | Store the full `fft_size` IDFT response instead of sparse taps |
+
+## Exact full-tap replay
+
+If the sparse tap fit error is high (for example when the input H contains
+strong per-subcarrier variation), use:
+
+```bash
+.venv/bin/python gui/npy_to_rfsim_bin.py \
+  --kind srs --exact-taps --n-rb 106 --scs 30000 \
+  <noisy srs_*.npy> \
+  --output /tmp/srs_exact.bin
+```
+
+The file then contains the full `fft_size`-point IDFT response per path and no
+LS fit is performed. The RFSim engine applies it as a time-domain FIR. Because
+this is denser than sparse replay, expect higher CPU usage.
 
 ## Converter input analysis
 

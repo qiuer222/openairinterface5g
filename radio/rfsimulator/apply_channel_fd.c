@@ -25,7 +25,7 @@
 #define REPLAY_MAGIC       0x48534D52
 #define REPLAY_VERSION     3
 #define MAX_REPLAY_SLOTS   100
-#define MAX_TAPS_PER_PATH  64
+#define MAX_TAPS_PER_PATH  65535
 
 typedef struct {
   uint32_t magic;

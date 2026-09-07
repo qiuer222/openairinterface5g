@@ -145,6 +145,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Optional directory for channel-analysis JSON and PNG figures.",
     )
     parser.add_argument(
+        "--exact-taps",
+        action="store_true",
+        help=(
+            "Store the full fft_size-point IDFT response instead of sparse "
+            "taps. Requires the overlap-add replay mode in RFSim."
+        ),
+    )
+    parser.add_argument(
         "--reference",
         nargs="+",
         help="Reserved for compatibility; sparse tap files are verified structurally.",
@@ -314,6 +322,37 @@ def sparse_taps_for_slot(
     return result
 
 
+def full_taps_for_slot(
+    h: np.ndarray,
+    fft_size: int,
+    subcarrier_offset: int,
+) -> np.ndarray:
+    """Return the exact (rx, tx, fft_size) time-domain impulse response."""
+    nrx, ntx, n_sc = h.shape
+    saved = np.nonzero(np.abs(h).sum(axis=(0, 1)) > 0)[0]
+    spectrum = np.zeros((nrx, ntx, fft_size), dtype=np.complex128)
+    if len(saved):
+        phys = (saved + subcarrier_offset) % fft_size
+        spectrum[:, :, phys] = h[:, :, saved] / float(1 << AMP_SCALE_BITS)
+    return np.fft.ifft(spectrum, axis=-1)
+
+
+def full_tap_paths(
+    taps: np.ndarray,
+) -> List[List[List[Tuple[int, complex]]]]:
+    """Convert full-tap array to the per-path (delay, value) representation."""
+    nrx, ntx, fft_size = taps.shape
+    result = []
+    for rx in range(nrx):
+        tx_paths = []
+        for tx in range(ntx):
+            tx_paths.append(
+                [(delay, complex(taps[rx, tx, delay])) for delay in range(fft_size)]
+            )
+        result.append(tx_paths)
+    return result
+
+
 def channel_to_c16(h: np.ndarray) -> bytes:
     if h.shape[-1] == 0:
         raise ValueError("channel has no subcarriers")
@@ -389,6 +428,40 @@ def write_sparse_taps(
             max_active_taps,
         ))
         for slot_idx, paths in enumerate(sparse_arrays):
+            fp.write(struct.pack("<I", slot_start + slot_idx))
+            for rx in range(nrx):
+                for tx in range(ntx):
+                    active = paths[rx][tx]
+                    fp.write(struct.pack("<H", len(active)))
+                    for delay, tap in active:
+                        fp.write(struct.pack("<H", delay))
+                        scaled = tap * (1 << TAP_SCALE_BITS_DEFAULT)
+                        fp.write(channel_to_c16(np.asarray([scaled])))
+    return nrx, ntx, fft_size, num_slots
+
+
+def write_exact_taps(
+    output: str,
+    arrays: Sequence[np.ndarray],
+    fft_size: int,
+    n_rb: int,
+    scs: int,
+    slot_start: int,
+    subcarrier_offset: int,
+) -> Tuple[int, int, int, int]:
+    """Write a full-tap RSMH file using every delay 0..fft_size-1."""
+    nrx, ntx, _ = arrays[0].shape
+    num_slots = len(arrays)
+    exact_arrays = []
+    for h in arrays:
+        taps = full_taps_for_slot(h, fft_size, subcarrier_offset)
+        exact_arrays.append(full_tap_paths(taps))
+
+    with open(output, "wb") as fp:
+        fp.write(make_header(
+            nrx, ntx, fft_size, n_rb, scs, num_slots, fft_size
+        ))
+        for slot_idx, paths in enumerate(exact_arrays):
             fp.write(struct.pack("<I", slot_start + slot_idx))
             for rx in range(nrx):
                 for tx in range(ntx):
@@ -540,42 +613,72 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         else:
             subcarrier_offset = fft_size - (args.n_rb * 12 // 2)
 
-    sparse_arrays = [
-        sparse_taps_for_slot(
-            h,
+    if args.exact_taps:
+        sparse_arrays = [
+            full_tap_paths(full_taps_for_slot(h, fft_size, subcarrier_offset))
+            for h in arrays
+        ]
+        _, _, _, num_slots = write_exact_taps(
+            output,
+            arrays,
             fft_size,
+            args.n_rb,
+            args.scs,
+            args.slot_start,
             subcarrier_offset,
-            tap_len=args.tap_len,
-            max_active_taps=args.max_active_taps,
         )
-        for h in arrays
-    ]
-    _, _, _, num_slots = write_sparse_taps(
-        output,
-        arrays,
-        fft_size,
-        args.n_rb,
-        args.scs,
-        args.slot_start,
-        subcarrier_offset,
-        args.tap_len,
-        args.max_active_taps,
-        sparse_arrays,
-    )
+    else:
+        sparse_arrays = [
+            sparse_taps_for_slot(
+                h,
+                fft_size,
+                subcarrier_offset,
+                tap_len=args.tap_len,
+                max_active_taps=args.max_active_taps,
+            )
+            for h in arrays
+        ]
+        _, _, _, num_slots = write_sparse_taps(
+            output,
+            arrays,
+            fft_size,
+            args.n_rb,
+            args.scs,
+            args.slot_start,
+            subcarrier_offset,
+            args.tap_len,
+            args.max_active_taps,
+            sparse_arrays,
+        )
     print(
         f"wrote {output}: {num_slots} slots, {nrx}x{ntx}, fft={fft_size}, "
         f"n_rb={args.n_rb}, scs={args.scs}, source={len(paths)} .npy file(s), "
         f"tap_scale_bits={TAP_SCALE_BITS_DEFAULT}"
         + (", transposed=rx<->tx" if args.transpose else "")
-        + f", ls_taps={args.tap_len}, max_active_taps={args.max_active_taps}"
+        + (
+            ", mode=exact-full-taps"
+            if args.exact_taps
+            else f", ls_taps={args.tap_len}, max_active_taps={args.max_active_taps}"
+        )
     )
 
     # ---- input channel inspection (always printed; optional files) ----
     summaries = [channel_metrics(h) for h in arrays]
-    tap_summaries = [
-        tap_report(h, paths_per_slot, fft_size, subcarrier_offset)
-        for h, paths_per_slot in zip(arrays, sparse_arrays)
-    ]
+    if args.exact_taps:
+        tap_summaries = [
+            {
+                "mode": "exact-full-taps",
+                "n_taps": fft_size,
+                "frequency_fit_rmse": 0.0,
+                "active_taps": fft_size,
+            }
+            for _ in arrays
+        ]
+    else:
+        tap_summaries = [
+            tap_report(h, paths_per_slot, fft_size, subcarrier_offset)
+            for h, paths_per_slot in zip(arrays, sparse_arrays)
+        ]
 
     print("channel analysis:")
     for slot_idx, (summary, taps) in enumerate(zip(summaries, tap_summaries)):
@@ -591,7 +694,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             f"[{summary['active_first']}..{summary['active_last']}] "
             f"rms=({path_amp}) cond_mean={cond:.2f} rank={ranks}"
         )
-        if slot_idx == 0 or num_slots == 1:
+        if args.exact_taps:
+            print(
+                f"  taps: mode=exact-full-taps "
+                f"n_taps/path={taps.get('n_taps', fft_size)} "
+                f"frequency_fit_rmse={taps.get('frequency_fit_rmse', 0.0):.6f}"
+            )
+        elif slot_idx == 0 or num_slots == 1:
             print("  tap details (shown for first slot):")
             for tap in taps:
                 if tap["active_taps"]:
@@ -613,6 +722,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "tap_len": args.tap_len,
             "max_active_taps": args.max_active_taps,
             "subcarrier_offset": subcarrier_offset,
+            "mode": "exact-full-taps" if args.exact_taps else "sparse",
             "slots": summaries,
             "taps": tap_summaries,
             "bin": output,
