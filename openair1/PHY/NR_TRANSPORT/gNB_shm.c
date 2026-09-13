@@ -122,7 +122,10 @@ static void write_dl_snapshot(const gnb_dl_meas_shm_t *m)
     last_dl_pmi_x2 = tmp.pmi_x2;
 
   gnb_dl_meas_shm_t *dst = (gnb_dl_meas_shm_t *)dl_base;
-  memcpy(dst, &tmp, sizeof(tmp) - sizeof(uint64_t));
+  /* Copy the payload only; seq is published after the memory barrier. */
+  memcpy((uint8_t *)dst + sizeof(tmp.seq),
+         (const uint8_t *)&tmp + sizeof(tmp.seq),
+         sizeof(tmp) - sizeof(tmp.seq));
   __sync_synchronize();
   dst->seq = __sync_add_and_fetch(&dl_seq, 1);
 }
@@ -199,7 +202,10 @@ void gNB_shm_write_ul_meas(const gnb_ul_meas_shm_t *m, bool crc_ok)
   tmp.ulsch_errors = ul_errors;
 
   gnb_ul_meas_shm_t *dst = (gnb_ul_meas_shm_t *)ul_base;
-  memcpy(dst, &tmp, sizeof(tmp) - sizeof(uint64_t));
+  /* Copy the payload only; seq is published after the memory barrier. */
+  memcpy((uint8_t *)dst + sizeof(tmp.seq),
+         (const uint8_t *)&tmp + sizeof(tmp.seq),
+         sizeof(tmp) - sizeof(tmp.seq));
   __sync_synchronize();
   dst->seq = __sync_add_and_fetch(&ul_seq, 1);
 }
