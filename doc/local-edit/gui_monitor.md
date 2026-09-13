@@ -305,7 +305,8 @@ The right panel contains three plots:
 
 ## 7. Local modifications: iperf.log-triggered recording and exit cleanup
 
-These changes are implemented in `gui/oai_ue_monitor.py`.
+These changes are implemented in `gui/oai_ue_monitor.py` and the archive flow
+is mirrored by `gui/oai_gnb_monitor.py`.
 
 ### 7.1 CSV and channel recording
 
@@ -328,15 +329,18 @@ These changes are implemented in `gui/oai_ue_monitor.py`.
 
 ### 7.2 Startup cleanup and exit-time archive
 
-- `closeEvent()` stops the timer and iperf3 process, closes the CSV, and closes
-  the shared-memory readers.
+- `closeEvent()` and the gNB/UE `Restart` action stop the timer and iperf3
+  process, close the CSV, and close the shared-memory readers.
 - At startup, the configured `iperf.log` is cleared, so each GUI run starts with
   an empty log.
-- On exit, the GUI asks whether the CSV, channel data, and iperf log should be
-  saved.
-- The default archive folder name is the first CSV timestamp. If the folder
-  already exists, the GUI asks for another name.
-- Choosing **OK** moves the CSV, channel/srs files, and iperf log into:
+- Every GUI initialization creates a new timestamped CSV and channel/SRS
+  directory. Restart starts a new process and therefore creates a new set.
+- On exit or Restart, the GUI first asks whether to store this run's CSV,
+  channel/SRS data, and iperf log.
+- `Yes` opens the folder-name prompt and archives the recordings.
+- `No` asks for a second confirmation before deleting this run's files. If
+  deletion is cancelled, the store question is shown again.
+- Archive selection moves the CSV, channel/srs files, and iperf log into:
   `gui/record/<user_folder>/`
 - The CSI channel directory is preserved as a subfolder:
 
@@ -344,8 +348,6 @@ These changes are implemented in `gui/oai_ue_monitor.py`.
   gui/record/<user_folder>/gui_ue_log_<timestamp>.csv
   gui/record/<user_folder>/gui_ue_log_<timestamp>/channel_<timestamp>.npy
   ```
-
-- Choosing **Cancel** leaves the data in their original locations.
 
 ### 7.3 Log path handling
 

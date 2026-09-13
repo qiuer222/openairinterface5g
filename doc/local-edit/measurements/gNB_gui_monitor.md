@@ -58,7 +58,17 @@ gui/record/gui_gnb_log_<timestamp>/srs_<timestamp>.npy
 ```
 
 The CSV is created once when the GUI starts; one CSV file is used for the whole
-GUI run. `Stop`, `UL`, and `DL` do not create new files.
+GUI run. `Stop`, `UL`, and `DL` do not create new files. Each GUI initialization
+or Restart creates a new timestamped CSV and SRS directory.
+
+The CSV column order is:
+
+```text
+common columns,
+UL columns,
+DL columns,
+SRS columns
+```
 
 ### 3.1 DL CSV field mapping
 
@@ -122,10 +132,14 @@ CSV rows are only appended when the newest line in the monitored iperf log is
 a 1-second instantaneous throughput interval. Final iperf3 average/summary
 lines are ignored.
 
-At startup the GUI clears the configured iperf log. On exit it asks whether the
-CSV, SRS channel data, and iperf log should be moved into
-`gui/record/<user_folder>/`. The default folder name is the first CSV timestamp;
-if the folder already exists, the GUI asks for another name. The SRS channel
+At startup the GUI clears the configured iperf log. On exit and before Restart
+it asks whether this run's CSV, SRS data, and iperf log should be stored:
+
+- `Yes` opens the former folder-name prompt and archives the recordings.
+- `No` asks for a second confirmation before deleting this run's files. If
+  deletion is cancelled, the save/store question is shown again.
+
+Archived files are placed in `gui/record/<user_folder>/`. The SRS channel
 directory is preserved as a subfolder:
 
 ```text

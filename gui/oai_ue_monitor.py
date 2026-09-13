@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
         self._csv_start_ts = ""
         self._test_round = 0
         self._log_based_test_round = False
+        self._recordings_finalized = False
 
         self._clear_log_file()
         self._build_ui()
@@ -210,6 +211,7 @@ class MainWindow(QMainWindow):
 
     def _restart_gui(self) -> None:
         self._stop_resources()
+        self._finalize_recordings()
         app = QApplication.instance()
         if app is not None:
             app.exit(RESTART_EXIT_CODE)
@@ -316,7 +318,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self._stop_resources()
-        self._ask_archive_recordings()
+        self._finalize_recordings()
         super().closeEvent(event)
 
     @staticmethod
@@ -363,7 +365,7 @@ class MainWindow(QMainWindow):
 
     def _open_csv(self) -> None:
         self._close_csv()
-        ts = time.strftime("%Y%m%d_%H%M%S")
+        ts = time.strftime("%Y%m%d_%H%M%S_%f")
         self._csv_start_ts = ts
         record_dir = os.path.join(GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)
@@ -454,28 +456,20 @@ class MainWindow(QMainWindow):
         except OSError:
             pass
 
-    def _ask_archive_recordings(self) -> None:
-        if not self._csv_path or not os.path.exists(self._csv_path):
-            return
-        default_name = self._csv_start_ts or time.strftime("%Y%m%d_%H%M%S")
-        text, ok = QInputDialog.getText(
-            self,
-            "Save recorded data?",
-            "Save CSV, channel data and iperf log as folder name:",
-            text=default_name,
-        )
-        if not ok:
-            return
-
+    def _default_archive_folder_name(self) -> str:
+        base_name = self._csv_start_ts or time.strftime("%Y%m%d_%H%M%S")
         record_dir = os.path.join(GUI_DIR, "record")
-        folder_name = os.path.basename(text.strip())
-        dest = os.path.join(record_dir, folder_name)
-        while not folder_name or os.path.exists(dest):
-            QMessageBox.warning(
-                self,
-                "Folder exists",
-                f"{dest} already exists. Choose another name.",
-            )
+        folder_name = base_name
+        suffix = 2
+        while os.path.exists(os.path.join(record_dir, folder_name)):
+            folder_name = f"{base_name}_{suffix}"
+            suffix += 1
+        return folder_name
+
+    def _prompt_archive_folder_name(self) -> Optional[str]:
+        record_dir = os.path.join(GUI_DIR, "record")
+        default_name = self._default_archive_folder_name()
+        while True:
             text, ok = QInputDialog.getText(
                 self,
                 "Save recorded data?",
@@ -483,20 +477,113 @@ class MainWindow(QMainWindow):
                 text=default_name,
             )
             if not ok:
-                return
+                return None
             folder_name = os.path.basename(text.strip())
+            if not folder_name:
+                QMessageBox.warning(
+                    self,
+                    "Invalid folder name",
+                    "Folder name cannot be empty.",
+                )
+                continue
             dest = os.path.join(record_dir, folder_name)
+            if os.path.exists(dest):
+                QMessageBox.warning(
+                    self,
+                    "Folder exists",
+                    f"{dest} already exists. Choose another name.",
+                )
+                continue
+            return folder_name
 
-        os.makedirs(dest, exist_ok=True)
-        shutil.move(self._csv_path, os.path.join(dest, os.path.basename(self._csv_path)))
-        if self._channel_dir and os.path.isdir(self._channel_dir):
-            shutil.move(
-                self._channel_dir,
-                os.path.join(dest, os.path.basename(self._channel_dir)),
+    def _archive_recordings(self, folder_name: str) -> bool:
+        record_dir = os.path.join(GUI_DIR, "record")
+        dest = os.path.join(record_dir, folder_name)
+        try:
+            os.makedirs(dest, exist_ok=True)
+            shutil.move(self._csv_path, os.path.join(dest, os.path.basename(self._csv_path)))
+            if self._channel_dir and os.path.isdir(self._channel_dir):
+                shutil.move(
+                    self._channel_dir,
+                    os.path.join(dest, os.path.basename(self._channel_dir)),
+                )
+            if os.path.exists(self._log_path):
+                shutil.move(
+                    self._log_path,
+                    os.path.join(dest, os.path.basename(self._log_path)),
+                )
+        except OSError as exc:
+            QMessageBox.critical(
+                self,
+                "Archive failed",
+                f"Could not archive recordings: {exc}",
             )
-        if os.path.exists(self._log_path):
-            shutil.move(self._log_path, os.path.join(dest, os.path.basename(self._log_path)))
+            return False
         self.status_label.setText(f"recordings saved to {dest}")
+        return True
+
+    def _delete_recordings(self) -> None:
+        errors = []
+        for path in (self._csv_path, self._log_path):
+            if path and os.path.exists(path):
+                try:
+                    os.remove(path)
+                except OSError as exc:
+                    errors.append(f"{path}: {exc}")
+        if self._channel_dir and os.path.isdir(self._channel_dir):
+            try:
+                shutil.rmtree(self._channel_dir)
+            except OSError as exc:
+                errors.append(f"{self._channel_dir}: {exc}")
+        if errors:
+            QMessageBox.critical(
+                self,
+                "Delete failed",
+                "Could not delete all recordings:\n" + "\n".join(errors),
+            )
+        else:
+            self.status_label.setText("recordings deleted")
+
+    def _confirm_delete_recordings(self) -> bool:
+        answer = QMessageBox.warning(
+            self,
+            "Delete recordings?",
+            "Do you want to permanently delete this run's CSV, channel data, "
+            "and iperf log?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
+    def _finalize_recordings(self) -> None:
+        if self._recordings_finalized:
+            return
+        if not self._csv_path or not os.path.exists(self._csv_path):
+            self._recordings_finalized = True
+            return
+
+        while True:
+            answer = QMessageBox.question(
+                self,
+                "Save recorded data?",
+                "Do you want to store this run's CSV, channel data, and iperf log?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer == QMessageBox.Yes:
+                folder_name = self._prompt_archive_folder_name()
+                if folder_name is None:
+                    continue
+            else:
+                if not self._confirm_delete_recordings():
+                    continue
+                self._delete_recordings()
+                self._recordings_finalized = True
+                return
+
+            if self._archive_recordings(folder_name):
+                self._recordings_finalized = True
+                return
 
 
 def main() -> None:
