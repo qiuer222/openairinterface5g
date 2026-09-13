@@ -6,14 +6,59 @@ for GUI SRS/CSI-RS channel `.npy` files. It complements the replay workflow in
 
 ## Overview
 
-Two commands are provided:
+Three commands are provided:
 
 | Command | Purpose |
 |---------|---------|
+| `gui/analyze_channel.py` | Analyze one CSI-RS/SRS `.npy` snapshot in frequency, time, MIMO, and capacity domains |
 | `gui/npy_to_rfsim_bin.py` | Convert `.npy` to sparse tap `.bin`; prints input analysis during conversion |
 | `gui/compare_channels.py` | Compare two same-kind channel recordings slot-by-slot |
 
 The common metrics/plotting code lives in `gui/channel_metrics.py`.
+
+## Single-channel analysis
+
+`gui/analyze_channel.py` accepts one channel filename:
+
+```bash
+.venv/bin/python gui/analyze_channel.py \
+  gui/record/gui_gnb_log_20260907_201732/srs_20260907_201812_285240.npy
+```
+
+It supports `(rx, tx, subcarrier)` arrays and the current SRS-compatible
+`(rx, tx, 1, subcarrier)` singleton-symbol layout. A report is always printed
+to the console. Add `--output-dir` to also write JSON, text, and figures:
+
+```bash
+.venv/bin/python gui/analyze_channel.py \
+  gui/record/gui_gnb_log_20260907_201732/srs_20260907_201812_285240.npy \
+  --output-dir /tmp/channel_analysis
+```
+
+The report includes:
+
+- input dimensions, active/invalid subcarrier counts, and assumptions;
+- per-RX/TX path power, magnitude ripple, peak-to-average ratio, phase slope,
+  group delay, frequency autocorrelation, coherence bandwidth, and a
+  Rician-like K factor;
+- per-subcarrier singular values, variance, coefficient of variation,
+  condition number, rank histograms, RX/TX covariance eigenvalues, and stream
+  orthogonality;
+- direct IDFT impulse response and regularized sparse-tap reconstruction with
+  delay, RMS delay spread, maximum excess delay, and fit error;
+- SVD capacity for every stream count, best stream count, and Shannon capacity.
+
+`n_rb`, `scs`, and FFT offset are not stored in `.npy`; defaults are
+`106 PRB`, `30 kHz`, SRS offset `fft_size/2`, and CSI-RS offset
+`fft_size - n_rb*12/2`. Override them with `--n-rb`, `--scs`, and
+`--subcarrier-offset`.
+
+Doppler, temporal correlation, and mobility cannot be derived from one
+snapshot; the script reports them as unavailable.
+
+See [channel_single_file_analysis.md](channel_single_file_analysis.md) for the
+full command examples, generated-file descriptions, figure interpretation, and
+metric definitions.
 
 ## Converter analysis
 
@@ -134,6 +179,7 @@ amplitude/phase does not distort the shape comparison.
 
 | File | Role |
 |------|------|
+| `gui/analyze_channel.py` | Single-channel frequency/time/MIMO/capacity analysis CLI |
 | `gui/channel_metrics.py` | SVD/condition/tap/comparison metrics and plots |
 | `gui/compare_channels.py` | Same-kind channel comparison CLI |
 | `gui/npy_to_rfsim_bin.py` | Converter with integrated inspection |
