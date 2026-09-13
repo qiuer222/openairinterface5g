@@ -11,6 +11,7 @@ from typing import Dict, Optional
 
 GNB_DL_MEAS_SHM = "/dev/shm/gnb_meas_dl"
 GNB_UL_MEAS_SHM = "/dev/shm/gnb_meas_ul"
+GNB_TPMI_INVALID = 0xFF
 
 
 class GnbDlShm(ctypes.Structure):
@@ -195,7 +196,7 @@ class GnbUlReader:
             "target_code_rate": m.target_code_rate,
             "timing_advance": m.timing_advance,
             "ul_cqi": m.ul_cqi,
-            "tpmi": m.tpmi,
+            "tpmi": None if m.tpmi == GNB_TPMI_INVALID else m.tpmi,
             "rssi": m.rssi,
             "n_rb_ul": m.n_rb_ul,
             "received": received,

@@ -18,6 +18,7 @@
 #define GNB_DL_MEAS_SHM_NAME "/gnb_meas_dl"
 #define GNB_UL_MEAS_SHM_NAME "/gnb_meas_ul"
 #define GNB_SRS_SHM_NAME     "/srs_channel"
+#define GNB_TPMI_INVALID      UINT8_C(0xFF)
 
 /* ---------- SRS sizing ---------- */
 #define GNB_SRS_MAX_RX_ANT   4

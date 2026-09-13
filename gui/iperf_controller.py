@@ -10,8 +10,10 @@ Final iperf3 summary lines such as ``0.00-30.00 sec ... sender`` are ignored.
 from __future__ import annotations
 
 import math
+import os
 import re
 import shutil
+import signal
 import subprocess
 from typing import List, Optional
 
@@ -54,11 +56,13 @@ class IperfController(QThread):
         self.latest_bps: float = 0.0
         self._proc: Optional[subprocess.Popen] = None
         self._cmd: List[str] = []
+        self._cleanup_cmd: List[str] = []
         self._log_path = "iperf.log"
 
     def start_ul(self, bs_ip: str, port: int, duration: int, log_path: str) -> None:
         """Start UE→BS upload using iperf3 client mode."""
         self._log_path = log_path
+        self._cleanup_cmd = []
         self._cmd = [
             "iperf3",
             "-c", bs_ip,
@@ -71,6 +75,7 @@ class IperfController(QThread):
     def start_dl_server(self, port: int, log_path: str) -> None:
         """Start DL server mode on the UE; the BS must run the matching client."""
         self._log_path = log_path
+        self._cleanup_cmd = []
         #self._cmd = ["iperf3", "-s", "-p", str(port), "-i", "1"]
         self._cmd = ["iperf3", "-B", "10.0.0."+str(port), "-c", "192.168.70.135", "-t", "30"]
         print("running iperf3 server with command:", " ".join(self._cmd))
@@ -79,6 +84,7 @@ class IperfController(QThread):
     def start_dl_reverse(self, bs_ip: str, port: int, duration: int, log_path: str) -> None:
         """Start BS→UE download using iperf3 reverse client mode."""
         self._log_path = log_path
+        self._cleanup_cmd = []
         self._cmd = [
             "iperf3",
             "-c", bs_ip,
@@ -94,12 +100,17 @@ class IperfController(QThread):
         self._log_path = log_path
         #self._cmd = ["iperf3", "-s", "-p", str(port), "-i", "1"]
         self._cmd = ["sudo", "docker", "exec", "-it", "oai-ext-dn", "iperf3", "-s", "-p", str(port)]
+        self._cleanup_cmd = [
+            "sudo", "docker", "exec", "oai-ext-dn",
+            "pkill", "-f", f"iperf3 -s -p {port}",
+        ]
         print("running iperf3 server with command:", " ".join(self._cmd))
         self.start()
 
     def start_dl_client(self, ue_ip: str, port: int, duration: int, log_path: str) -> None:
         """Start gNB-side DL client for gNB→UE download."""
         self._log_path = log_path
+        self._cleanup_cmd = []
         self._cmd = [
             "iperf3",
             "-c", ue_ip,
@@ -110,18 +121,54 @@ class IperfController(QThread):
         self.start()
 
     def stop(self) -> None:
-        if self._proc is not None:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                self._proc.kill()
         self.requestInterruption()
-        self.wait(2000)
+        if self._proc is not None:
+            self._terminate_process_tree(self._proc)
+        self._cleanup_remote_process()
+        self.wait(3000)
+
+    @staticmethod
+    def _terminate_process_tree(proc: subprocess.Popen) -> None:
+        if proc.poll() is not None:
+            return
+        try:
+            if os.name == "posix":
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            else:
+                proc.terminate()
+            proc.wait(timeout=3)
+            return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+        try:
+            if os.name == "posix":
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            else:
+                proc.kill()
+            proc.wait(timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def _cleanup_remote_process(self) -> None:
+        if not self._cleanup_cmd:
+            return
+        try:
+            subprocess.run(
+                self._cleanup_cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
 
     def run(self) -> None:
         if not self._cmd:
             self.process_error.emit("No iperf command configured")
+            return
+        if self.isInterruptionRequested():
             return
         try:
             cmd = self._cmd
@@ -135,12 +182,17 @@ class IperfController(QThread):
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                start_new_session=os.name == "posix",
             )
         except FileNotFoundError:
             self.process_error.emit("iperf3 not found on PATH")
             return
         except OSError as exc:
             self.process_error.emit(str(exc))
+            return
+
+        if self.isInterruptionRequested():
+            self._terminate_process_tree(self._proc)
             return
 
         with open(self._log_path, "a", encoding="utf-8") as log:

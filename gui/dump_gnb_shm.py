@@ -10,7 +10,13 @@ import sys
 if __package__ in (None, ""):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from gui.gnb_meas_reader import GNB_DL_MEAS_SHM, GNB_UL_MEAS_SHM, GnbDlShm, GnbUlShm
+from gui.gnb_meas_reader import (
+    GNB_DL_MEAS_SHM,
+    GNB_TPMI_INVALID,
+    GNB_UL_MEAS_SHM,
+    GnbDlShm,
+    GnbUlShm,
+)
 from gui.srs_reader import GNB_SRS_SHM, GNB_SRS_SHM_TOTAL_SIZE, GnbSrsShmHdr
 
 
@@ -42,13 +48,14 @@ def main() -> None:
 
     ul = _read_struct(GNB_UL_MEAS_SHM, GnbUlShm, ctypes.sizeof(GnbUlShm))
     if ul is not None:
+        tpmi = "N/A" if ul.tpmi == GNB_TPMI_INVALID else str(ul.tpmi)
         print(
             f"seq={ul.seq} frame={ul.frame} slot={ul.slot} rnti=0x{ul.rnti:04x} "
             f"received={ul.ulsch_received} errors={ul.ulsch_errors} "
             f"bler_x1000={ul.bler_x1000} sinr_db_x10={ul.sinr_db_x10} "
             f"mcs={ul.mcs} qm={ul.qam_mod_order} nprb={ul.num_rbs} "
             f"tbs_bits={ul.tbs} ta={ul.timing_advance} ul_cqi={ul.ul_cqi} "
-            f"tpmi={ul.tpmi}"
+            f"tpmi={tpmi}"
         )
 
     srs = _read_struct(GNB_SRS_SHM, GnbSrsShmHdr, GNB_SRS_SHM_TOTAL_SIZE)

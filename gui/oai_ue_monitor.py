@@ -365,7 +365,7 @@ class MainWindow(QMainWindow):
 
     def _open_csv(self) -> None:
         self._close_csv()
-        ts = time.strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self._csv_start_ts = ts
         record_dir = os.path.join(GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)

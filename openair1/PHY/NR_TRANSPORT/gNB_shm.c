@@ -25,11 +25,6 @@ static uint32_t dl_errors   = 0;
 static uint32_t ul_received = 0;
 static uint32_t ul_errors   = 0;
 static int      init_count  = 0;
-static uint8_t  last_dl_cqi = 0;
-static uint8_t  last_dl_ri  = 0;
-static int16_t  last_dl_sinr_db_x10 = 0;
-static uint8_t  last_dl_pmi_x1 = 0;
-static uint8_t  last_dl_pmi_x2 = 0;
 
 static bool open_region(const char *name, size_t size, int *fd, void **base)
 {
@@ -70,11 +65,6 @@ bool gNB_shm_init(void)
     dl_errors = 0;
     ul_received = 0;
     ul_errors = 0;
-    last_dl_cqi = 0;
-    last_dl_ri = 0;
-    last_dl_sinr_db_x10 = 0;
-    last_dl_pmi_x1 = 0;
-    last_dl_pmi_x2 = 0;
   }
 
   if (!open_region(GNB_DL_MEAS_SHM_NAME, sizeof(gnb_dl_meas_shm_t), &dl_fd, &dl_base))
@@ -98,28 +88,7 @@ static void write_dl_snapshot(const gnb_dl_meas_shm_t *m)
   if (dl_base == NULL || m == NULL)
     return;
 
-  gnb_dl_meas_shm_t tmp = *m;
-  if (tmp.cqi == 0 && last_dl_cqi != 0)
-    tmp.cqi = last_dl_cqi;
-  if (tmp.ri == 0 && last_dl_ri != 0)
-    tmp.ri = last_dl_ri;
-  if (tmp.sinr_db_x10 == 0 && last_dl_sinr_db_x10 != 0)
-    tmp.sinr_db_x10 = last_dl_sinr_db_x10;
-  if (tmp.pmi_x1 == 0 && last_dl_pmi_x1 != 0)
-    tmp.pmi_x1 = last_dl_pmi_x1;
-  if (tmp.pmi_x2 == 0 && last_dl_pmi_x2 != 0)
-    tmp.pmi_x2 = last_dl_pmi_x2;
-
-  if (tmp.cqi != 0)
-    last_dl_cqi = tmp.cqi;
-  if (tmp.ri != 0)
-    last_dl_ri = tmp.ri;
-  if (tmp.sinr_db_x10 != 0)
-    last_dl_sinr_db_x10 = tmp.sinr_db_x10;
-  if (tmp.pmi_x1 != 0)
-    last_dl_pmi_x1 = tmp.pmi_x1;
-  if (tmp.pmi_x2 != 0)
-    last_dl_pmi_x2 = tmp.pmi_x2;
+  const gnb_dl_meas_shm_t tmp = *m;
 
   gnb_dl_meas_shm_t *dst = (gnb_dl_meas_shm_t *)dl_base;
   /* Copy the payload only; seq is published after the memory barrier. */
@@ -162,27 +131,11 @@ void gNB_shm_update_dl_csi(uint16_t rnti,
 
   gnb_dl_meas_shm_t *dst = (gnb_dl_meas_shm_t *)dl_base;
   dst->rnti = rnti;
-  if (cqi != 0)
-    dst->cqi = cqi;
-  if (ri != 0)
-    dst->ri = ri;
-  if (sinr_db_x10 != 0)
-    dst->sinr_db_x10 = sinr_db_x10;
-  if (pmi_x1 != 0)
-    dst->pmi_x1 = pmi_x1;
-  if (pmi_x2 != 0)
-    dst->pmi_x2 = pmi_x2;
-
-  if (dst->cqi != 0)
-    last_dl_cqi = dst->cqi;
-  if (dst->ri != 0)
-    last_dl_ri = dst->ri;
-  if (dst->sinr_db_x10 != 0)
-    last_dl_sinr_db_x10 = dst->sinr_db_x10;
-  if (dst->pmi_x1 != 0)
-    last_dl_pmi_x1 = dst->pmi_x1;
-  if (dst->pmi_x2 != 0)
-    last_dl_pmi_x2 = dst->pmi_x2;
+  dst->cqi = cqi;
+  dst->ri = ri;
+  dst->sinr_db_x10 = sinr_db_x10;
+  dst->pmi_x1 = pmi_x1;
+  dst->pmi_x2 = pmi_x2;
 
   __sync_synchronize();
   dst->seq = __sync_add_and_fetch(&dl_seq, 1);

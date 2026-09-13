@@ -293,6 +293,8 @@ class GnbMainWindow(QMainWindow):
         self.dl_label.setText("\n".join(lines))
 
     def _update_ul_text(self, m: Dict) -> None:
+        tpmi = m.get("tpmi")
+        tpmi_text = "N/A" if tpmi is None else str(tpmi)
         lines = [
             f"Frame: {m.get('frame', 0)}  Slot: {m.get('slot', 0)}  "
             f"RNTI: {int(m.get('rnti', 0)):#06x}",
@@ -302,7 +304,7 @@ class GnbMainWindow(QMainWindow):
             f"Layers: {m.get('layers', 0)}  Symbols: {m.get('nsymb', 0)}  "
             f"TBS (bits): {m.get('tbs', 0)}",
             f"RV: {m.get('rv', 0)}  NDI: {m.get('ndi', 0)}  "
-            f"UL CQI: {m.get('ul_cqi', 0)}  TPMI: {m.get('tpmi', 0)}  "
+            f"UL CQI: {m.get('ul_cqi', 0)}  TPMI: {tpmi_text}  "
             f"RSSI: {m.get('rssi', 0)}",
         ]
         self.ul_label.setText("\n".join(lines))
@@ -379,7 +381,7 @@ class GnbMainWindow(QMainWindow):
 
     def _open_csv(self) -> None:
         self._close_csv()
-        ts = time.strftime("%Y%m%d_%H%M%S_%f")
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self._csv_start_ts = ts
         record_dir = os.path.join(GNB_GUI_DIR, "record")
         os.makedirs(record_dir, exist_ok=True)
@@ -421,7 +423,7 @@ class GnbMainWindow(QMainWindow):
             ul.get("mcs", 0), ul.get("nprb", 0), ul.get("layers", 0),
             ul.get("qm", 0), ul.get("tbs", 0),
             ul.get("timing_advance", 0), ul.get("ul_cqi", 0),
-            ul.get("tpmi", 0),
+            "" if ul.get("tpmi") is None else ul.get("tpmi"),
             dl.get("frame", 0), dl.get("slot", 0), dl.get("rnti", 0),
             dl.get("bler", 0), dl.get("sinr", 0),
             dl.get("mcs", 0), dl.get("nprb", 0), dl.get("layers", 0),

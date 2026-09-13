@@ -120,7 +120,14 @@ DL CSV columns and their source variables:
 `ul_tbs` is also stored as bits (`harq->sched_pusch.tb_size * 8`), and both
 DL/UL `rv` fields now use `nr_get_rv(harq->round % 4)` instead of a hard-coded
 zero. The gNB UL CSV also records `ul_tpmi` from
-`harq->sched_pusch.tpmi`; it is written only when TPMI is non-negative.
+`harq->sched_pusch.tpmi`. TPMI 0 is a valid value; unavailable TPMI is stored
+as `0xff` in SHM and written as an empty CSV field.
+
+DL CQI, RI, SINR, and PMI are copied directly from the current CSI report.
+Zero is a valid CQI/PMI/SINR value and is not replaced by a previous non-zero
+sample. The CSV samples the latest shared-memory value when an iperf interval
+is recorded, so a MAC terminal stats print made at a different instant can
+still show the newer report.
 
 Each CSV row includes `test_round` to identify the iperf test round. On the gNB
 DL client side, `test_round` increments every time DL is clicked. On the gNB UL
@@ -216,7 +223,7 @@ UL fields are written by `handle_nr_ul_harq()` in
 | `ul_tbs` | `tbs` | `harq->sched_pusch.tb_size * 8` | TBS in bits |
 | `ul_timing_advance` | `timing_advance` | reserved; not populated by current UL HARQ writer | currently 0 |
 | `ul_cqi` | `ul_cqi` | reserved; not populated by current UL HARQ writer | currently 0 |
-| `ul_tpmi` | `tpmi` | `harq->sched_pusch.tpmi` | UL TPMI index, written only when non-negative |
+| `ul_tpmi` | `tpmi` | `harq->sched_pusch.tpmi` | UL TPMI index; empty when `tpmi` is unavailable |
 
 ### 4.4 SRS columns
 

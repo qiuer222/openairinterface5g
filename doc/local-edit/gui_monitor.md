@@ -331,6 +331,9 @@ is mirrored by `gui/oai_gnb_monitor.py`.
 
 - `closeEvent()` and the gNB/UE `Restart` action stop the timer and iperf3
   process, close the CSV, and close the shared-memory readers.
+- iperf3 runs in its own process group. Closing or restarting terminates the
+  whole group, and the gNB UL server also removes the `iperf3 -s` process
+  inside the `oai-ext-dn` container.
 - At startup, the configured `iperf.log` is cleared, so each GUI run starts with
   an empty log.
 - Every GUI initialization creates a new timestamped CSV and channel/SRS
