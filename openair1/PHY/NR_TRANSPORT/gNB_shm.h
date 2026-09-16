@@ -3,7 +3,7 @@
  *
  * Shared memory interface between OAI NR gNB PHY/MAC and the external Python
  * gNB monitor. Three regions are exported:
- *   /gnb_meas_dl - DL transmission measurements and HARQ/BLER counters
+ *   /gnb_meas_dl - latest connected-UE PDSCH scheduler snapshot
  *   /gnb_meas_ul - UL transmission measurements and HARQ/BLER counters
  *   /srs_channel - latest SRS channel estimate
  */
@@ -19,6 +19,7 @@
 #define GNB_UL_MEAS_SHM_NAME "/gnb_meas_ul"
 #define GNB_SRS_SHM_NAME     "/srs_channel"
 #define GNB_TPMI_INVALID      UINT8_C(0xFF)
+#define GNB_SINR_INVALID      INT16_MIN
 
 /* ---------- SRS sizing ---------- */
 #define GNB_SRS_MAX_RX_ANT   4
@@ -36,7 +37,7 @@ typedef struct __attribute__((packed)) {
   uint32_t  dlsch_received;
   uint32_t  dlsch_errors;
   uint16_t  bler_x1000;
-  int16_t   sinr_db_x10;
+  int16_t   sinr_db_x10;           /* UE SSB SINR x10; GNB_SINR_INVALID */
   uint8_t   mcs;
   uint8_t   qam_mod_order;
   uint32_t  tbs;                   /* transport block size (bits)   */
@@ -106,19 +107,8 @@ typedef struct __attribute__((packed)) {
 /** Initialise/open all gNB monitor shared memory regions. */
 bool gNB_shm_init(void);
 
-/** Write the latest DL transmission measurement. */
-void gNB_shm_write_dl_meas(const gnb_dl_meas_shm_t *m, bool crc_ok);
-
-/** Write a DL transmission snapshot from the scheduler (does not count HARQ). */
+/** Write the latest connected-UE PDSCH scheduler snapshot. */
 void gNB_shm_write_dl_sched(const gnb_dl_meas_shm_t *m);
-
-/** Update the latest DL CSI-derived fields after a successful CSI report. */
-void gNB_shm_update_dl_csi(uint16_t rnti,
-                           uint8_t  cqi,
-                           uint8_t  ri,
-                           int16_t  sinr_db_x10,
-                           uint8_t  pmi_x1,
-                           uint8_t  pmi_x2);
 
 /** Write the latest UL transmission measurement. */
 void gNB_shm_write_ul_meas(const gnb_ul_meas_shm_t *m, bool crc_ok);

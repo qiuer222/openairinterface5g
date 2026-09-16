@@ -250,9 +250,10 @@ class GnbMainWindow(QMainWindow):
             self._write_csv(stamp)
 
         t = time.monotonic() - self._t0
+        dl_sinr = self._last_dl.get("sinr")
         values: Dict[str, float] = {"throughput": self._iperf_bps / 1e6}
         values.update({
-            "dl_sinr": float(self._last_dl.get("sinr", 0)),
+            "dl_sinr": float(dl_sinr) if dl_sinr is not None else 0.0,
             "dl_bler": float(self._last_dl.get("bler", 0)),
             "dl_mcs": float(self._last_dl.get("mcs", 0)),
             "dl_nprb": float(self._last_dl.get("nprb", 0)),
@@ -278,11 +279,13 @@ class GnbMainWindow(QMainWindow):
         self.plot_manager.srs.add_sample(t, values)
 
     def _update_dl_text(self, m: Dict) -> None:
+        sinr = m.get("sinr")
+        sinr_text = "N/A" if sinr is None else f"{sinr:.1f} dB"
         lines = [
             f"Frame: {m.get('frame', 0)}  Slot: {m.get('slot', 0)}  "
             f"RNTI: {int(m.get('rnti', 0)):#06x}",
             f"BLER: {m.get('bler', 0):.2f} %",
-            f"SINR: {m.get('sinr', 0):.1f} dB  CQI: {m.get('cqi', 0)}  "
+            f"SINR: {sinr_text} (UE SSB)  CQI: {m.get('cqi', 0)}  "
             f"RI/Layers: {m.get('ri', 0)}",
             f"MCS: {m.get('mcs', 0)}  Qm: {m.get('qm', 0)}  NPRB: {m.get('nprb', 0)}",
             f"Layers: {m.get('layers', 0)}  Symbols: {m.get('nsymb', 0)}  "
@@ -425,7 +428,7 @@ class GnbMainWindow(QMainWindow):
             ul.get("timing_advance", 0), ul.get("ul_cqi", 0),
             "" if ul.get("tpmi") is None else ul.get("tpmi"),
             dl.get("frame", 0), dl.get("slot", 0), dl.get("rnti", 0),
-            dl.get("bler", 0), dl.get("sinr", 0),
+            dl.get("bler", 0), "" if dl.get("sinr") is None else dl.get("sinr"),
             dl.get("mcs", 0), dl.get("nprb", 0), dl.get("layers", 0),
             dl.get("qm", 0), dl.get("tbs", 0), dl.get("cqi", 0), dl.get("ri", 0),
             dl.get("nsymb", 0), dl.get("rv", 0), dl.get("ndi", 0),

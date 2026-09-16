@@ -20,8 +20,6 @@ static void  *srs_base = NULL;
 static uint64_t dl_seq  = 0;
 static uint64_t ul_seq  = 0;
 static uint64_t srs_seq = 0;
-static uint32_t dl_received = 0;
-static uint32_t dl_errors   = 0;
 static uint32_t ul_received = 0;
 static uint32_t ul_errors   = 0;
 static int      init_count  = 0;
@@ -61,8 +59,6 @@ bool gNB_shm_init(void)
   }
 
   if (init_count == 0) {
-    dl_received = 0;
-    dl_errors = 0;
     ul_received = 0;
     ul_errors = 0;
   }
@@ -99,46 +95,9 @@ static void write_dl_snapshot(const gnb_dl_meas_shm_t *m)
   dst->seq = __sync_add_and_fetch(&dl_seq, 1);
 }
 
-void gNB_shm_write_dl_meas(const gnb_dl_meas_shm_t *m, bool crc_ok)
-{
-  if (dl_base == NULL || m == NULL)
-    return;
-
-  dl_received++;
-  if (!crc_ok)
-    dl_errors++;
-
-  gnb_dl_meas_shm_t tmp = *m;
-  tmp.dlsch_received = dl_received;
-  tmp.dlsch_errors = dl_errors;
-  write_dl_snapshot(&tmp);
-}
-
 void gNB_shm_write_dl_sched(const gnb_dl_meas_shm_t *m)
 {
   write_dl_snapshot(m);
-}
-
-void gNB_shm_update_dl_csi(uint16_t rnti,
-                           uint8_t  cqi,
-                           uint8_t  ri,
-                           int16_t  sinr_db_x10,
-                           uint8_t  pmi_x1,
-                           uint8_t  pmi_x2)
-{
-  if (dl_base == NULL)
-    return;
-
-  gnb_dl_meas_shm_t *dst = (gnb_dl_meas_shm_t *)dl_base;
-  dst->rnti = rnti;
-  dst->cqi = cqi;
-  dst->ri = ri;
-  dst->sinr_db_x10 = sinr_db_x10;
-  dst->pmi_x1 = pmi_x1;
-  dst->pmi_x2 = pmi_x2;
-
-  __sync_synchronize();
-  dst->seq = __sync_add_and_fetch(&dl_seq, 1);
 }
 
 void gNB_shm_write_ul_meas(const gnb_ul_meas_shm_t *m, bool crc_ok)

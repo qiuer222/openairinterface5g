@@ -20,16 +20,16 @@ closed when the gNB thread pool is terminated.
 Three regions are exported:
 
 ```text
-/dev/shm/gnb_meas_dl  - DL HARQ feedback, UE-reported SINR/CQI/RI, MCS, NPRB...
+/dev/shm/gnb_meas_dl  - latest connected-UE PDSCH scheduler snapshot
 /dev/shm/gnb_meas_ul  - UL PUSCH decode, PHY SINR, MCS, NPRB, TBS, TA...
 /dev/shm/srs_channel  - latest SRS channel estimate
 ```
 
-DL measurements are written from `gNB_scheduler_uci.c` when DL HARQ feedback is
-processed and from `gNB_scheduler_dlsch.c` for scheduler-time snapshots. UL
-measurements are written from `gNB_scheduler_ulsch.c` when UL HARQ CRC feedback
-is processed. The SRS channel is written from `phy_procedures_nr_gNB.c` after
-SRS channel estimation.
+DL measurements are written only from `gNB_scheduler_dlsch.c` for connected-UE
+PDSCH scheduler snapshots. HARQ feedback and CSI decoding update scheduler
+state but do not write `gnb_meas_dl`. UL measurements are written from
+`gNB_scheduler_ulsch.c` when UL HARQ CRC feedback is processed. The SRS
+channel is written from `phy_procedures_nr_gNB.c` after SRS channel estimation.
 
 ## 3. GUI
 
@@ -101,7 +101,7 @@ DL CSV columns and their source variables:
 | `dl_slot` | `slot` | scheduled PDSCH slot | slot in SFN |
 | `dl_rnti` | `rnti` | UE RNTI | UE identifier |
 | `dl_bler` | `bler_x1000` | `sched_ctrl->dl_bler_stats.bler * 1000` | percent (`/10` in Python) |
-| `dl_sinr` | `sinr_db_x10` | averaged CSI SINR or `nr_mac_get_snr(pucch_pc)` | dB x10 |
+| `dl_sinr` | `sinr_db_x10` | averaged UE-reported SSB/CSI-RS SINR | dB x10; unavailable otherwise |
 | `dl_mcs` | `mcs` | `sched_pdsch->mcs` | MCS index |
 | `dl_nprb` | `num_rbs` | `sched_pdsch->rbSize` | allocated PRBs |
 | `dl_layers` | `num_layers` | `sched_pdsch->nrOfLayers` | scheduled layers |
@@ -123,11 +123,13 @@ zero. The gNB UL CSV also records `ul_tpmi` from
 `harq->sched_pusch.tpmi`. TPMI 0 is a valid value; unavailable TPMI is stored
 as `0xff` in SHM and written as an empty CSV field.
 
-DL CQI, RI, SINR, and PMI are copied directly from the current CSI report.
-Zero is a valid CQI/PMI/SINR value and is not replaced by a previous non-zero
-sample. The CSV samples the latest shared-memory value when an iperf interval
-is recorded, so a MAC terminal stats print made at a different instant can
-still show the newer report.
+DL CQI, RI, PMI, BLER, counters, and SINR are sampled when the PDSCH scheduler
+snapshot is written. `dl_sinr` never falls back to PUCCH power-control SNR.
+The last valid UE-reported SINR is retained in scheduler state until a newer
+report arrives; without one, CSV is empty and the GUI shows `N/A`. Zero is a
+valid CQI/PMI value and is not replaced by a previous non-zero sample. A CSI
+report received after the last PDSCH becomes visible on the next PDSCH
+snapshot.
 
 Each CSV row includes `test_round` to identify the iperf test round. On the gNB
 DL client side, `test_round` increments every time DL is clicked. On the gNB UL
@@ -187,7 +189,7 @@ All DL fields are written by `generate_dl_mac_pdu()` in
 | `dl_slot` | `slot` | `generate_dl_mac_pdu()` slot argument | PDSCH slot |
 | `dl_rnti` | `rnti` | scheduled UE `rnti` | RNTI |
 | `dl_bler` | `bler_x1000` | `sched_ctrl->dl_bler_stats.bler * 1000` | BLER in percent after Python `/10` |
-| `dl_sinr` | `sinr_db_x10` | `UE->mac_stats.cumul_sinrx10 / num_sinr_meas`, else CSI `ssb_rsrp_report.r[0].SINRx10`, else `nr_mac_get_snr(&sched_ctrl->pucch_pc)` | SINR in dB after Python `/10` |
+| `dl_sinr` | `sinr_db_x10` | `UE->mac_stats.cumul_sinrx10 / num_sinr_meas`; last valid UE-reported SSB/CSI-RS SINR retained in SHM | SINR in dB after Python `/10`; empty when unavailable |
 | `dl_mcs` | `mcs` | `sched_pdsch->mcs` | DL MCS |
 | `dl_nprb` | `num_rbs` | `sched_pdsch->rbSize` | allocated PRBs |
 | `dl_layers` | `num_layers` | `sched_pdsch->nrOfLayers` | scheduled DL layers |

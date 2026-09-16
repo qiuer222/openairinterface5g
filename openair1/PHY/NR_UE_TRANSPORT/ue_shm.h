@@ -15,6 +15,7 @@
 /* ---------- shared memory region names ---------- */
 #define CSI_RS_SHM_NAME  "/csi_rs_channel"
 #define MEAS_DL_SHM_NAME "/meas_dl"
+#define UE_SINR_INVALID  INT16_MIN
 
 /* ---------- magic / sizing ---------- */
 #define UE_SHM_MAGIC       0x5545534DUL   /* "UESM" */
@@ -74,7 +75,8 @@ typedef struct __attribute__((packed)) {
   int32_t   rsrp_dBm;              /* serving cell RSRP in dBm      */
   int32_t   rsrp_per_ant_dBm[CSI_RS_MAX_RX_ANT]; /* per-RX-antenna SS-RSRP in dBm */
   int16_t   rssi_dBm;              /* RSSI in dBm                   */
-  int16_t   wideband_sinr_dB;      /* SINR from wideband_cqi_tot   */
+  int16_t   wideband_sinr_dB;      /* wideband_cqi_tot, integer dB */
+  int16_t   ssb_sinr_db_x10;       /* SSB SINR x10; INT16_MIN invalid */
   /* system / carrier info */
   uint16_t  n_rb_dl;
   uint32_t  subcarrier_spacing;

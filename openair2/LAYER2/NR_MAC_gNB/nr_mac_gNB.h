@@ -729,6 +729,10 @@ typedef struct {
   nr_srs_feedback_t srs_feedback;
   NR_timer_t aperiodic_srs_trigger;
 
+  /// Last successfully decoded UE-reported SSB/CSI-RS SINR
+  int dl_sinr_db_x10;
+  bool dl_sinr_valid;
+
   /// per-LC configuration
   seq_arr_t lc_config;
 

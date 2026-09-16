@@ -119,7 +119,8 @@ class PlotManager(QWidget):
         layout = QVBoxLayout(self)
         self.throughput = MetricPlot("Throughput", ["throughput"])
         self.pdsch = MetricPlot(
-            "PDSCH Metrics", ["rsrp", "bler", "sinr", "mcs", "nprb"]
+            "PDSCH Metrics",
+            ["rsrp", "bler", "sinr", "wideband_cqi", "mcs", "nprb"],
         )
         self.csi = MetricPlot(
             "CSI Channel Quality",

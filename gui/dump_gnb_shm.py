@@ -12,6 +12,7 @@ if __package__ in (None, ""):
 
 from gui.gnb_meas_reader import (
     GNB_DL_MEAS_SHM,
+    GNB_SINR_INVALID,
     GNB_TPMI_INVALID,
     GNB_UL_MEAS_SHM,
     GnbDlShm,
@@ -38,10 +39,11 @@ def _read_struct(path: str, struct_type, expected_size: int):
 def main() -> None:
     dl = _read_struct(GNB_DL_MEAS_SHM, GnbDlShm, ctypes.sizeof(GnbDlShm))
     if dl is not None:
+        sinr = "N/A" if dl.sinr_db_x10 == GNB_SINR_INVALID else f"{dl.sinr_db_x10 / 10.0:.1f}"
         print(
             f"seq={dl.seq} frame={dl.frame} slot={dl.slot} rnti=0x{dl.rnti:04x} "
             f"received={dl.dlsch_received} errors={dl.dlsch_errors} "
-            f"bler_x1000={dl.bler_x1000} sinr_db_x10={dl.sinr_db_x10} "
+            f"bler_x1000={dl.bler_x1000} sinr_db={sinr} "
             f"mcs={dl.mcs} qm={dl.qam_mod_order} nprb={dl.num_rbs} "
             f"tbs_bits={dl.tbs} cqi={dl.cqi} ri={dl.ri} pmi=({dl.pmi_x1},{dl.pmi_x2})"
         )

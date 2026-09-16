@@ -1355,6 +1355,9 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
     }
     meas_tmp.rssi_dBm = ue->measurements.rx_rssi_dBm[gNB_id];
     meas_tmp.wideband_sinr_dB = (int16_t)ue->measurements.wideband_cqi_tot[gNB_id];
+    const float ssb_sinr = ue->measurements.ssb_sinr_dB[ssb_idx];
+    meas_tmp.ssb_sinr_db_x10 =
+        ssb_sinr == (float)INT_MIN ? UE_SINR_INVALID : (int16_t)(ssb_sinr * 10.0f);
     meas_tmp.n_rb_dl = ue->frame_parms.N_RB_DL;
     meas_tmp.subcarrier_spacing = ue->frame_parms.subcarrier_spacing;
     meas_tmp.freq_offset = ue->common_vars.freq_offset;

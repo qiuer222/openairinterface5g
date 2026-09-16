@@ -83,7 +83,8 @@ seq, frame, slot,
 mcs, qam_mod_order, tbs, num_layers, num_rbs, num_symbols,
 rv, new_data_indicator, target_code_rate,
 bitrate_bps, dlsch_received, dlsch_errors, dlsch_fer,
-rsrp_dBm, rsrp_per_ant_dBm[4], rssi_dBm, wideband_sinr_dB,
+rsrp_dBm, rsrp_per_ant_dBm[4], rssi_dBm,
+wideband_sinr_dB, ssb_sinr_db_x10,
 n_rb_dl, subcarrier_spacing, freq_offset, nb_antennas_rx
 ```
 
@@ -197,7 +198,7 @@ new_data_indicator, target_code_rate, bitrate_bps,
 dlsch_received, dlsch_errors, bler,
 rsrp_dBm, rssi_dBm, sinr_dB, freq_offset_hz,
 rsrp_ant0_dBm, rsrp_ant1_dBm, rsrp_ant2_dBm, rsrp_ant3_dBm,
-n_rb_dl, scs, nb_antennas_rx
+n_rb_dl, scs, nb_antennas_rx, wideband_cqi_dB
 ```
 
 `timestamp` is local wall-clock time in `%Y%m%d_%H%M%S_%f` format:
@@ -210,6 +211,10 @@ n_rb_dl, scs, nb_antennas_rx
 incremented each time UL/DL is clicked. On server-side tests it is incremented
 each time the iperf3 server reports a new `Accepted connection from ...` line.
 The counter resets to zero when the GUI process restarts.
+
+`sinr_dB` is the UE SSB SINR, not the old wideband CQI proxy. The legacy proxy
+is appended as `wideband_cqi_dB` and is measured in integer dB. If SSB SINR is
+not available yet, `sinr_dB` is empty in CSV and shown as `N/A` in the GUI.
 
 ### 4.3 `gui/record/gui_ue_log_<timestamp>/channel_<timestamp>.npy`
 
@@ -372,48 +377,45 @@ stores it.
 ### 8.1 UE monitor - `sinr_dB`
 
 - CSV column: `sinr_dB`
-- SHM: `/dev/shm/meas_dl` -> `meas_dl_shm_t.wideband_sinr_dB`
+- SHM: `/dev/shm/meas_dl` -> `meas_dl_shm_t.ssb_sinr_db_x10`
 - Written by `ue_shm_write_meas_dl()` in
   `openair1/SCHED_NR_UE/phy_procedures_nr_ue.c:1357`
-- Value (`openair1/PHY/NR_UE_ESTIMATION/nr_ue_measurements.c:99`):
+- Value (`openair1/PHY/NR_UE_ESTIMATION/nr_ue_measurements.c:223`):
 
   ```text
-  wideband_cqi_tot[gNB_id] = rx_power_tot_dB[gNB_id] - n0_power_tot_dB
+  signal_pwr = max(ssb_rsrp - n0_power_avg, 0)
+  ssb_sinr_db_x10 = dB_fixed_x10(signal_pwr)
+                    - dB_fixed_x10(n0_power_avg)
   ```
 
-- Definition: a UE-PHY **wideband DL SINR** (in dB x10) derived from the DL
-  channel estimates (`dl_ch_estimates`) over the full bandwidth
-  (`number_rbs * NR_NB_SC_PER_RB` REs) as total received signal power minus the
-  noise-power estimate. It is read back as `sinr = wideband_sinr_dB / 10.0`
-  (`gui/meas_reader.py:97`) and displayed as `SINR: X.X dB`.
-- Note: this is not SSB SINR (`ssb_sinr_dB`) and not the CSI CQI; it is the
-  UE PHY's internal wideband SINR proxy.
+- Definition: UE-measured **SSB SINR**, stored in shared memory in dB x10. It
+  is displayed as `SSB SINR: X.X dB`. `INT16_MIN` means no valid SSB SINR yet,
+  and the GUI/CSV report `N/A` or an empty field.
+- The legacy wideband proxy is now recorded separately as
+  `wideband_cqi_dB`. It uses
+  `wideband_cqi_tot = rx_power_tot_dB - n0_power_tot_dB`; both terms use
+  integer-dB `dB_fixed()`, so no `/10` scaling is applied.
+- Note: `wideband_cqi_dB` is a raw UE PHY channel-estimate/noise proxy, not
+  SSB SINR and not a calibrated DL SINR.
 
 ### 8.2 gNB monitor - DL `dl_sinr`
 
 - CSV column: `dl_sinr`
 - SHM: `/dev/shm/gnb_meas_dl` -> `gnb_dl_meas_shm_t.sinr_db_x10`
-- Writers:
+- Writer: `gNB_shm_write_dl_sched()` in
+  `gNB_scheduler_dlsch.c`, called once for every connected-UE PDSCH scheduler
+  snapshot. There is no HARQ or CSI SHM writer.
+- Source:
+  - `UE->mac_stats.cumul_sinrx10 / num_sinr_meas` when the current MAC stats
+    window has UE SINR measurements;
+  - otherwise `sched_ctrl->dl_sinr_db_x10`, the last successfully decoded
+    UE-reported SSB/CSI-RS SINR;
+  - otherwise `INT16_MIN`, meaning no valid DL SINR.
 
-  1. `gNB_shm_update_dl_csi()` (`openair1/PHY/NR_TRANSPORT/gNB_shm.c`), called
-     from `gNB_scheduler_uci.c:902` after each decoded CSI report: stores the
-     UE-reported SSB SINR
-     `CSI_report.ssb_rsrp_report.r[0].SINRx10` (dB x10).
-  2. DL measurement / scheduler snapshots (`gNB_shm_write_dl_meas()` in
-     `gNB_scheduler_uci.c:367`, `gNB_shm_write_dl_sched()` in
-     `gNB_scheduler_dlsch.c:1224`):
-     - `UE->mac_stats.cumul_sinrx10 / num_sinr_meas` when CSI SINR
-       measurements exist;
-     - otherwise the gNB **PUCCH power-control SNR**
-       `nr_mac_get_snr(&sched_ctrl->pucch_pc)`, derived from the UE-reported
-       PUCCH CQI via `pucch_snrx10 = ul_cqi * 5 - 640`
-       (`gNB_scheduler_uci.c:1068`). The fallback triggers when `SINRx10 == 0`.
-
-- Read as `sinr = sinr_db_x10 / 10.0` (`gui/gnb_meas_reader.py:122`), displayed
-  as `SINR: X.X dB  CQI: N  RI: N  PMI: (a,b)`.
-- Note: DL SINR is either the UE-reported SSB SINR (when a CSI SINR report is
-  configured) or the gNB-side PUCCH-SNR proxy; it is not a gNB RF measurement
-  of the DL signal.
+- Read as `sinr = sinr_db_x10 / 10.0`; `INT16_MIN` becomes `None`, displayed
+  as `SINR: N/A (UE SSB)`, and written as an empty CSV field.
+- Note: DL SINR is the UE-reported SSB/CSI-RS SINR. It is not a gNB RF
+  measurement and never uses PUCCH/PUSCH SNR.
 
 ### 8.3 gNB monitor - UL `ul_sinr`
 

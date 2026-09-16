@@ -256,11 +256,13 @@ class MainWindow(QMainWindow):
             self._write_csv(stamp)
 
         t = time.monotonic() - self._t0
+        meas_sinr = self._last_meas.get("sinr")
         values: Dict[str, float] = {"throughput": self._iperf_bps / 1e6}
         values.update({
             "bler": float(self._last_meas.get("bler", 0)),
             "rsrp": float(self._last_meas.get("rsrp", -140)),
-            "sinr": float(self._last_meas.get("sinr", 0)),
+            "sinr": float(meas_sinr) if meas_sinr is not None else 0.0,
+            "wideband_cqi": float(self._last_meas.get("wideband_cqi", 0)),
             "mcs": float(self._last_meas.get("mcs", 0)),
             "nprb": float(self._last_meas.get("nprb", 0)),
         })
@@ -277,11 +279,14 @@ class MainWindow(QMainWindow):
     def _update_meas_text(self, meas: Dict) -> None:
         rsrp_per_ant = meas.get("rsrp_per_ant", [])
         self.rsrp_plot.update_values(rsrp_per_ant)
+        sinr = meas.get("sinr")
+        sinr_text = "N/A" if sinr is None else f"{sinr:.1f} dB"
         lines = [
             f"Frame: {meas.get('frame', 0)}  Slot: {meas.get('slot', 0)}",
             f"BLER: {meas.get('bler', 0)} %",
             f"RSRP: {meas.get('rsrp', 0)} dBm",
-            f"SINR: {meas.get('sinr', 0):.1f} dB",
+            f"SSB SINR: {sinr_text}",
+            f"Wideband CQI proxy: {meas.get('wideband_cqi', 0):.0f} dB",
             f"MCS: {meas.get('mcs', 0)}",
             f"NPRB: {meas.get('nprb', 0)}",
             f"Layers: {meas.get('layers', 0)}  TBS: {meas.get('tbs', 0)}",
@@ -385,7 +390,7 @@ class MainWindow(QMainWindow):
             "bitrate_bps", "dlsch_received", "dlsch_errors", "bler",
             "rsrp_dBm", "rssi_dBm", "sinr_dB", "freq_offset_hz",
             "rsrp_ant0_dBm", "rsrp_ant1_dBm", "rsrp_ant2_dBm", "rsrp_ant3_dBm",
-            "n_rb_dl", "scs", "nb_antennas_rx",
+            "n_rb_dl", "scs", "nb_antennas_rx", "wideband_cqi_dB",
         ])
         self._csv_fd.flush()
         self.status_label.setText(f"logging to {self._csv_path}")
@@ -424,12 +429,13 @@ class MainWindow(QMainWindow):
             self._last_meas.get("bler", 0),
             self._last_meas.get("rsrp", 0),
             self._last_meas.get("rssi", 0),
-            self._last_meas.get("sinr", 0.0),
+            "" if self._last_meas.get("sinr") is None else self._last_meas.get("sinr"),
             self._last_meas.get("freq_offset", 0),
             *rsrp_per_ant,
             self._last_meas.get("n_rb_dl", 0),
             self._last_meas.get("scs", 0),
             self._last_meas.get("nb_antennas_rx", 0),
+            self._last_meas.get("wideband_cqi", 0),
         ])
         self._csv_fd.flush()
 

@@ -45,6 +45,23 @@ The MAC usage message prints the average only when `num_sinr_meas > 0`:
 average SINR %d.%d dB (%d meas)
 ```
 
+This is the only gNB-side DL SINR suitable for the gNB GUI. OpenAirInterface
+does not calculate a gNB RF DL SINR. If the UE is not configured to report
+SSB/CSI-RS SINR, the GUI reports `dl_sinr` as unavailable instead of using an
+uplink estimate.
+
+The UE also maintains a separate wideband CQI proxy:
+
+```text
+wideband_cqi_tot = rx_power_tot_dB - n0_power_tot_dB
+wideband_cqi_avg = rx_power_avg_dB - n0_power_avg_dB
+```
+
+Both `dB_fixed()` values are integer dB, so these proxy values must not be
+divided by 10. The proxy compares average DL channel-estimate energy with the
+SSS-derived noise estimate. It is not the standards-based SSB SINR and is
+reported separately as `wideband_cqi_dB`.
+
 ### 2.2 gNB PUCCH SNR
 
 For PUCCH power control, the gNB converts the UE-reported PUCCH CQI to SNR:
@@ -117,20 +134,26 @@ calculation.
 
 ### UE GUI
 
-The UE GUI displays SS-RSRP and SS-SINR from the UE measurement path.
+The UE GUI displays:
+
+- `sinr_dB`: the SSB SINR from `ue->measurements.ssb_sinr_dB`, quantized to
+  0.1 dB in shared memory.
+- `wideband_cqi_dB`: the integer-dB wideband channel-estimate/noise proxy.
+- the SS-RSRP values from the UE measurement path.
 
 ### gNB GUI DL
 
-The DL panel currently uses:
+The DL panel uses only:
 
-1. `UE->mac_stats.cumul_sinrx10 / num_sinr_meas` when CSI SINR measurements
-   exist.
-2. The latest SSB/CSI-RS SINR report when available.
-3. `nr_mac_get_snr(&sched_ctrl->pucch_pc)` as a fallback.
+```text
+UE->mac_stats.cumul_sinrx10 / num_sinr_meas
+```
 
-Because the user configuration can report CQI/RI/RSRP without CSI SINR, the
-DL panel can show a PUCCH-SNR-based value even though the MAC usage message has
-no `average SINR` line.
+when at least one UE SINR report is available. Otherwise the last valid
+UE-reported SINR is read from per-UE scheduler state and copied by the next
+PDSCH scheduler snapshot. `PUCCH power-control SNR` is never used as
+`dl_sinr`. If no UE SINR report has ever been available, `dl_sinr` is empty in
+CSV and shown as `N/A` in the GUI.
 
 ### gNB GUI UL
 
@@ -145,6 +168,19 @@ which matches the filtered PUSCH SNR printed by MAC usage.
 ### gNB GUI SRS
 
 The SRS panel uses `snr_db_x10` from the SRS shared-memory header.
+
+### Previous value errors
+
+The old gNB GUI could show `pucch_pc.avg_snr` as `dl_sinr` when no UE SINR
+report was present. That value is an uplink PUCCH power-control estimate and
+must not be interpreted as downlink SINR.
+
+The old UE GUI stored `wideband_cqi_tot` in a field nominally interpreted as
+dB x10, then divided it by 10 in Python. However, `wideband_cqi_tot` is the
+difference of two `dB_fixed()` results and is therefore integer dB. For
+example, a stored value of `-30` was displayed as `-3.0 dB`. The current GUI
+uses the separately measured SSB SINR for `sinr_dB`, stores it explicitly as
+dB x10, and records the legacy proxy separately as `wideband_cqi_dB`.
 
 ## 4. What is `c16_t`?
 

@@ -12,6 +12,7 @@ from typing import Dict, Optional
 GNB_DL_MEAS_SHM = "/dev/shm/gnb_meas_dl"
 GNB_UL_MEAS_SHM = "/dev/shm/gnb_meas_ul"
 GNB_TPMI_INVALID = 0xFF
+GNB_SINR_INVALID = -32768
 
 
 class GnbDlShm(ctypes.Structure):
@@ -121,7 +122,11 @@ class GnbDlReader:
             "slot": m.slot,
             "rnti": int(m.rnti),
             "bler": m.bler_x1000 / 10.0,
-            "sinr": 0.0 if sinr_db_x10 == -32768 else sinr_db_x10 / 10.0,
+            "sinr": (
+                None
+                if sinr_db_x10 == GNB_SINR_INVALID
+                else sinr_db_x10 / 10.0
+            ),
             "mcs": m.mcs,
             "qm": m.qam_mod_order,
             "tbs": m.tbs,

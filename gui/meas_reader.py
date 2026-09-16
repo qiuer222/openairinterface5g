@@ -11,6 +11,7 @@ from typing import Dict, Optional
 
 MEAS_DL_SHM = "/dev/shm/meas_dl"
 MEAS_DL_MAX_RX_ANT = 4
+UE_SINR_INVALID = -32768
 
 
 class MeasDlShm(ctypes.Structure):
@@ -38,6 +39,7 @@ class MeasDlShm(ctypes.Structure):
         ("rsrp_per_ant_dBm",  ctypes.c_int32 * MEAS_DL_MAX_RX_ANT),
         ("rssi_dBm",          ctypes.c_int16),
         ("wideband_sinr_dB",  ctypes.c_int16),
+        ("ssb_sinr_db_x10",   ctypes.c_int16),
         ("n_rb_dl",           ctypes.c_uint16),
         ("subcarrier_spacing", ctypes.c_uint32),
         ("freq_offset",       ctypes.c_int32),
@@ -85,6 +87,7 @@ class MeasDlReader:
         if m.seq == 0 or m.seq == self.prev_seq:
             return None
         self.prev_seq = m.seq
+        ssb_sinr_db_x10 = int(m.ssb_sinr_db_x10)
         return {
             "frame": m.frame,
             "slot": m.slot,
@@ -94,7 +97,12 @@ class MeasDlReader:
                 m.rsrp_per_ant_dBm[i]
                 for i in range(min(int(m.nb_antennas_rx), MEAS_DL_MAX_RX_ANT))
             ],
-            "sinr": m.wideband_sinr_dB / 10.0,
+            "sinr": (
+                None
+                if ssb_sinr_db_x10 == UE_SINR_INVALID
+                else ssb_sinr_db_x10 / 10.0
+            ),
+            "wideband_cqi": float(m.wideband_sinr_dB),
             "mcs": m.mcs,
             "nprb": m.num_rbs,
             "qm": m.qam_mod_order,

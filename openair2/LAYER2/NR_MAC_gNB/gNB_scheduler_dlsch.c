@@ -1199,13 +1199,10 @@ static void generate_dl_mac_pdu(gNB_MAC_INST *mac,
   m.bler_x1000 = (uint16_t)(sched_ctrl->dl_bler_stats.bler * 1000.0f);
   if (UE->mac_stats.num_sinr_meas > 0)
     m.sinr_db_x10 = (int16_t)(UE->mac_stats.cumul_sinrx10 / UE->mac_stats.num_sinr_meas);
-  else {
-    const int sinrx10 = sched_ctrl->CSI_report.ssb_rsrp_report.r[0].SINRx10;
-    if (sinrx10 != 0)
-      m.sinr_db_x10 = (int16_t)sinrx10;
-    else
-      m.sinr_db_x10 = (int16_t)(nr_mac_get_snr(&sched_ctrl->pucch_pc) * 10.0f);
-  }
+  else if (sched_ctrl->dl_sinr_valid)
+    m.sinr_db_x10 = (int16_t)sched_ctrl->dl_sinr_db_x10;
+  else
+    m.sinr_db_x10 = GNB_SINR_INVALID;
   m.mcs = sched_pdsch->mcs;
   m.qam_mod_order = sched_pdsch->Qm;
   m.tbs = (uint32_t)sched_pdsch->tb_size * 8u;
