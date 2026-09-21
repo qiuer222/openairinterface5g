@@ -44,6 +44,7 @@ class MeasDlShm(ctypes.Structure):
         ("subcarrier_spacing", ctypes.c_uint32),
         ("freq_offset",       ctypes.c_int32),
         ("nb_antennas_rx",    ctypes.c_uint8),
+        ("n_rb_ul",           ctypes.c_uint16),
     ]
 
 
@@ -120,4 +121,5 @@ class MeasDlReader:
             "n_rb_dl": m.n_rb_dl,
             "scs": m.subcarrier_spacing,
             "nb_antennas_rx": m.nb_antennas_rx,
+            "n_rb_ul": m.n_rb_ul,
         }

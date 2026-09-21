@@ -45,7 +45,9 @@ def main() -> None:
             f"received={dl.dlsch_received} errors={dl.dlsch_errors} "
             f"bler_x1000={dl.bler_x1000} sinr_db={sinr} "
             f"mcs={dl.mcs} qm={dl.qam_mod_order} nprb={dl.num_rbs} "
-            f"tbs_bits={dl.tbs} cqi={dl.cqi} ri={dl.ri} pmi=({dl.pmi_x1},{dl.pmi_x2})"
+            f"tbs_bits={dl.tbs} cqi={dl.cqi} ri={dl.ri} "
+            f"pmi=({dl.pmi_x1},{dl.pmi_x2}) n_rb_dl={dl.n_rb_dl} "
+            f"scs_khz={dl.subcarrier_spacing_khz}"
         )
 
     ul = _read_struct(GNB_UL_MEAS_SHM, GnbUlShm, ctypes.sizeof(GnbUlShm))
@@ -57,7 +59,8 @@ def main() -> None:
             f"bler_x1000={ul.bler_x1000} sinr_db_x10={ul.sinr_db_x10} "
             f"mcs={ul.mcs} qm={ul.qam_mod_order} nprb={ul.num_rbs} "
             f"tbs_bits={ul.tbs} ta={ul.timing_advance} ul_cqi={ul.ul_cqi} "
-            f"tpmi={tpmi}"
+            f"tpmi={tpmi} n_rb_ul={ul.n_rb_ul} "
+            f"scs_khz={ul.subcarrier_spacing_khz}"
         )
 
     srs = _read_struct(GNB_SRS_SHM, GnbSrsShmHdr, GNB_SRS_SHM_TOTAL_SIZE)

@@ -1362,6 +1362,7 @@ void pdsch_processing(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_
     meas_tmp.subcarrier_spacing = ue->frame_parms.subcarrier_spacing;
     meas_tmp.freq_offset = ue->common_vars.freq_offset;
     meas_tmp.nb_antennas_rx = ue->frame_parms.nb_antennas_rx;
+    meas_tmp.n_rb_ul = ue->frame_parms.N_RB_UL;
     ue_shm_write_meas_dl(&meas_tmp);
   }
  UEscopeCopy(ue, commonRxdataF, rxdataF, sizeof(int32_t), ue->frame_parms.nb_antennas_rx, rxdataF_sz, 0);

@@ -83,6 +83,7 @@ generate_dl_mac_pdu()
     | frame, slot, rnti
     | mcs, Qm, TBS (bits), nrOfLayers, rbSize, symbols
     | rv, ndi, R, CSI cqi/ri/pmi, SINR/BLER stats
+    | active DL BWP PRBs and subcarrier spacing
     v
 /dev/shm/gnb_meas_dl
     |
@@ -116,6 +117,9 @@ DL CSV columns and their source variables:
 | `dl_pmi_x1` | `pmi_x1` | CSI report PMI x1 | PMI field |
 | `dl_pmi_x2` | `pmi_x2` | CSI report PMI x2 | PMI field |
 | `dl_n_rb_dl` | `n_rb_dl` | `sched_pdsch->bwp_info.bwpSize` | active DL BWP size in PRBs |
+| `dl_scs_khz` | `subcarrier_spacing_khz` | `15 << UE->current_DL_BWP.scs` | active DL subcarrier spacing in kHz |
+| `dl_sched_se` | computed in GUI | `dl_tbs / (dl_nprb * 12 * dl_nsymb)` | scheduled DL spectral efficiency in bit/s/Hz |
+| `dl_app_se` | computed in GUI | DL iperf throughput / active DL BWP bandwidth | application-level DL spectral efficiency in bit/s/Hz |
 
 `ul_tbs` is also stored as bits (`harq->sched_pusch.tb_size * 8`), and both
 DL/UL `rv` fields now use `nr_get_rv(harq->round % 4)` instead of a hard-coded
@@ -130,6 +134,34 @@ report arrives; without one, CSV is empty and the GUI shows `N/A`. Zero is a
 valid CQI/PMI value and is not replaced by a previous non-zero sample. A CSI
 report received after the last PDSCH becomes visible on the next PDSCH
 snapshot.
+
+### 3.2 Spectral efficiency and iperf direction
+
+Each row records `iperf_direction` as `DL`, `UL`, or empty. Application-level
+SE is only calculated when the iperf direction matches the measured link:
+
+```text
+dl_app_se = dl_throughput_mbps * 1e6
+            / (dl_n_rb_dl * 12 * dl_scs_khz * 1000)
+
+ul_app_se = ul_throughput_mbps * 1e6
+            / (ul_n_rb_ul * 12 * ul_scs_khz * 1000)
+```
+
+These values use iperf3 interval throughput and the active BWP bandwidth. They
+include idle slots, HARQ retransmissions, scheduling gaps, and protocol
+overhead. If the current direction is not DL/UL, the corresponding application
+SE is an empty CSV field.
+
+Scheduled SE uses the current transport block and allocated resources:
+
+```text
+dl_sched_se = dl_tbs / (dl_nprb * 12 * dl_nsymb)
+ul_sched_se = ul_tbs / (ul_nprb * 12 * ul_nsymb)
+```
+
+These values do not use iperf, exclude idle slots, and describe one scheduled
+PDSCH/PUSCH allocation. Retransmissions are visible as separate snapshots.
 
 Each CSV row includes `test_round` to identify the iperf test round. On the gNB
 DL client side, `test_round` increments every time DL is clicked. On the gNB UL
@@ -175,6 +207,7 @@ section lists every column and where the value comes from in OAI / the GUI.
 |---|---|---|---|
 | `timestamp` | `datetime.now()` in `_refresh()` | N/A | GUI local wall-clock time in `%Y%m%d_%H%M%S_%f` |
 | `test_round` | GUI counter | N/A | iperf round; client-side click or server-side `Accepted connection` line |
+| `iperf_direction` | active GUI test | UL/DL button handler | `DL`, `UL`, or empty when no iperf test is active |
 | `throughput_mbps` | `IperfController.parse_iperf3_line()` | iperf3 stdout interval line | instantaneous bits/sec converted to Mbps |
 
 ### 4.2 DL columns
@@ -204,6 +237,9 @@ All DL fields are written by `generate_dl_mac_pdu()` in
 | `dl_pmi_x1` | `pmi_x1` | same CSI report `pmi_x1` | PMI part 1 |
 | `dl_pmi_x2` | `pmi_x2` | same CSI report `pmi_x2` | PMI part 2 |
 | `dl_n_rb_dl` | `n_rb_dl` | `sched_pdsch->bwp_info.bwpSize` | active DL BWP size in PRBs |
+| `dl_scs_khz` | `subcarrier_spacing_khz` | `15 << UE->current_DL_BWP.scs` | active DL subcarrier spacing in kHz |
+| `dl_sched_se` | computed in GUI | `dl_tbs / (dl_nprb * 12 * dl_nsymb)` | scheduled DL SE in bit/s/Hz |
+| `dl_app_se` | computed in GUI | `dl_throughput_mbps * 1e6 / (dl_n_rb_dl * 12 * dl_scs_khz * 1000)` | application-level DL SE in bit/s/Hz |
 
 ### 4.3 UL columns
 
@@ -223,6 +259,11 @@ UL fields are written by `handle_nr_ul_harq()` in
 | `ul_layers` | `num_layers` | `harq->sched_pusch.nrOfLayers` | scheduled UL layers |
 | `ul_qm` | `qam_mod_order` | `harq->sched_pusch.Qm` | modulation order |
 | `ul_tbs` | `tbs` | `harq->sched_pusch.tb_size * 8` | TBS in bits |
+| `ul_nsymb` | `num_symbols` | `harq->sched_pusch.tda_info.nrOfSymbols` | allocated PUSCH symbols |
+| `ul_n_rb_ul` | `n_rb_ul` | `harq->sched_pusch.bwp_info.bwpSize` | active UL BWP size in PRBs |
+| `ul_scs_khz` | `subcarrier_spacing_khz` | `15 << UE->current_UL_BWP.scs` | active UL subcarrier spacing in kHz |
+| `ul_sched_se` | computed in GUI | `ul_tbs / (ul_nprb * 12 * ul_nsymb)` | scheduled UL SE in bit/s/Hz |
+| `ul_app_se` | computed in GUI | `ul_throughput_mbps * 1e6 / (ul_n_rb_ul * 12 * ul_scs_khz * 1000)` | application-level UL SE in bit/s/Hz |
 | `ul_timing_advance` | `timing_advance` | reserved; not populated by current UL HARQ writer | currently 0 |
 | `ul_cqi` | `ul_cqi` | reserved; not populated by current UL HARQ writer | currently 0 |
 | `ul_tpmi` | `tpmi` | `harq->sched_pusch.tpmi` | UL TPMI index; empty when `tpmi` is unavailable |
@@ -249,5 +290,7 @@ cd cmake_targets
 ./build_oai --gNB --build-everything
 ```
 
-After rebuilding `nr-gnb`, restart the gNB before starting the GUI so the new
-shared-memory regions are created with the expected layout.
+The DL and UL shared-memory layouts now include `subcarrier_spacing_khz`.
+Rebuild `nr-gnb` and restart it before starting the GUI so the writer and
+Python reader use the same layout. The UE shared-memory layout also gained
+`n_rb_ul`, so rebuild and restart the UE before using UE-side UL application SE.

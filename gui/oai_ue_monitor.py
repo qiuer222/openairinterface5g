@@ -41,6 +41,11 @@ from gui.csi_reader import CsiRsReader
 from gui.iperf_controller import IperfController, parse_iperf3_line
 from gui.meas_reader import MeasDlReader
 from gui.plot_manager import AntennaRsrpPlot, PlotManager
+from gui.spectral_efficiency import (
+    application_spectral_efficiency,
+    bandwidth_hz,
+    scheduled_spectral_efficiency,
+)
 
 
 DEFAULT_CONFIG = {
@@ -89,6 +94,9 @@ class MainWindow(QMainWindow):
         )
         self._log_state: Optional[tuple[int, int]] = None
         self._iperf_bps: float = 0.0
+        self._iperf_direction = ""
+        self._iperf_dl_bps: float = 0.0
+        self._iperf_ul_bps: float = 0.0
         self._last_meas: Dict = {}
         self._last_csi: Dict = {}
         self._t0 = time.monotonic()
@@ -179,6 +187,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _start_ul(self) -> None:
+        self._prepare_iperf_direction("UL")
         self._test_round += 1
         self._log_based_test_round = False
         cfg = self._ui_config()
@@ -188,6 +197,7 @@ class MainWindow(QMainWindow):
         self.iperf.start_ul(cfg["bs_ip"], cfg["port"], cfg["duration"], cfg["log_file"])
 
     def _start_dl(self) -> None:
+        self._prepare_iperf_direction("DL")
         cfg = self._ui_config()
         if self.reverse_check.isChecked():
             self._test_round += 1
@@ -207,7 +217,24 @@ class MainWindow(QMainWindow):
 
     def _stop_iperf(self) -> None:
         self.iperf.stop()
+        self._reset_iperf_throughput()
         self.status_label.setText("iperf3 stopped")
+
+    def _prepare_iperf_direction(self, direction: str) -> None:
+        self._iperf_direction = direction
+        self._iperf_bps = 0.0
+        if direction == "DL":
+            self._iperf_dl_bps = 0.0
+        elif direction == "UL":
+            self._iperf_ul_bps = 0.0
+
+    def _reset_iperf_throughput(self) -> None:
+        if self._iperf_direction == "DL":
+            self._iperf_dl_bps = 0.0
+        elif self._iperf_direction == "UL":
+            self._iperf_ul_bps = 0.0
+        self._iperf_bps = 0.0
+        self._iperf_direction = ""
 
     def _restart_gui(self) -> None:
         self._stop_resources()
@@ -232,8 +259,9 @@ class MainWindow(QMainWindow):
         }
 
     def _refresh(self) -> None:
+        direction = self._iperf_direction or "--"
         self.throughput_label.setText(
-            f"Throughput: {self._iperf_bps / 1e6:.1f} Mbps"
+            f"Throughput [{direction}]: {self._iperf_bps / 1e6:.1f} Mbps"
         )
         meas = self.meas_reader.read()
         if meas is not None:
@@ -257,6 +285,9 @@ class MainWindow(QMainWindow):
 
         t = time.monotonic() - self._t0
         meas_sinr = self._last_meas.get("sinr")
+        dl_sched_se = self._scheduled_se(self._last_meas)
+        dl_app_se = self._application_se(self._last_meas, "DL", "n_rb_dl")
+        ul_app_se = self._application_se(self._last_meas, "UL", "n_rb_ul")
         values: Dict[str, float] = {"throughput": self._iperf_bps / 1e6}
         values.update({
             "bler": float(self._last_meas.get("bler", 0)),
@@ -265,6 +296,9 @@ class MainWindow(QMainWindow):
             "wideband_cqi": float(self._last_meas.get("wideband_cqi", 0)),
             "mcs": float(self._last_meas.get("mcs", 0)),
             "nprb": float(self._last_meas.get("nprb", 0)),
+            "dl_sched_se": float(dl_sched_se or 0.0),
+            "dl_app_se": float(dl_app_se or 0.0),
+            "ul_app_se": float(ul_app_se or 0.0),
         })
         values.update({
             "capacity": float(self._last_csi.get("capacity", 0)),
@@ -281,6 +315,17 @@ class MainWindow(QMainWindow):
         self.rsrp_plot.update_values(rsrp_per_ant)
         sinr = meas.get("sinr")
         sinr_text = "N/A" if sinr is None else f"{sinr:.1f} dB"
+        dl_bw = bandwidth_hz(
+            int(meas.get("n_rb_dl", 0)),
+            self._scs_khz(meas),
+        )
+        scheduled_se_text = self._format_se(self._scheduled_se(meas))
+        dl_app_se_text = self._format_se(
+            self._application_se(meas, "DL", "n_rb_dl")
+        )
+        ul_app_se_text = self._format_se(
+            self._application_se(meas, "UL", "n_rb_ul")
+        )
         lines = [
             f"Frame: {meas.get('frame', 0)}  Slot: {meas.get('slot', 0)}",
             f"BLER: {meas.get('bler', 0)} %",
@@ -291,6 +336,9 @@ class MainWindow(QMainWindow):
             f"NPRB: {meas.get('nprb', 0)}",
             f"Layers: {meas.get('layers', 0)}  TBS: {meas.get('tbs', 0)}",
             f"Qm: {meas.get('qm', 0)}  Freq offset: {meas.get('freq_offset', 0)} Hz",
+            f"DL BW: {dl_bw / 1e6:.2f} MHz  Sched SE: {scheduled_se_text} bit/s/Hz",
+            f"DL App SE: {dl_app_se_text} bit/s/Hz  "
+            f"UL App SE: {ul_app_se_text} bit/s/Hz",
         ]
         if self._last_csi:
             lines.append(
@@ -305,8 +353,45 @@ class MainWindow(QMainWindow):
             )
         self.meas_label.setText("\n".join(lines))
 
+    @staticmethod
+    def _scs_khz(m: Dict) -> int:
+        return int(m.get("scs", 0)) // 1000
+
+    @staticmethod
+    def _scheduled_se(m: Dict) -> Optional[float]:
+        return scheduled_spectral_efficiency(
+            int(m.get("tbs", 0)),
+            int(m.get("nprb", 0)),
+            int(m.get("nsymb", 0)),
+        )
+
+    def _application_se(
+        self,
+        m: Dict,
+        direction: str,
+        n_rb_key: str,
+    ) -> Optional[float]:
+        if self._iperf_direction != direction:
+            return None
+        throughput_bps = (
+            self._iperf_dl_bps if direction == "DL" else self._iperf_ul_bps
+        )
+        return application_spectral_efficiency(
+            throughput_bps,
+            int(m.get(n_rb_key, 0)),
+            self._scs_khz(m),
+        )
+
+    @staticmethod
+    def _format_se(value: Optional[float]) -> str:
+        return "N/A" if value is None else f"{value:.3f}"
+
     def _on_iperf_throughput(self, bps: float) -> None:
         self._iperf_bps = bps
+        if self._iperf_direction == "DL":
+            self._iperf_dl_bps = bps
+        elif self._iperf_direction == "UL":
+            self._iperf_ul_bps = bps
 
     def _on_iperf_log(self, line: str) -> None:
         self.log_view.appendPlainText(line)
@@ -382,7 +467,7 @@ class MainWindow(QMainWindow):
         self._csv_writer = csv.writer(self._csv_fd)
         self._reset_log_state()
         self._csv_writer.writerow([
-            "timestamp", "test_round", "throughput_mbps",
+            "timestamp", "test_round", "iperf_direction", "throughput_mbps",
             "sv0", "sv1", "sv2", "sv3", "sv4", "sv5", "sv6", "sv7",
             "capacity", "rank", "condition_number",
             "frame", "slot", "mcs", "qm", "tbs_bits", "layers", "nprb",
@@ -391,6 +476,7 @@ class MainWindow(QMainWindow):
             "rsrp_dBm", "rssi_dBm", "sinr_dB", "freq_offset_hz",
             "rsrp_ant0_dBm", "rsrp_ant1_dBm", "rsrp_ant2_dBm", "rsrp_ant3_dBm",
             "n_rb_dl", "scs", "nb_antennas_rx", "wideband_cqi_dB",
+            "n_rb_ul", "dl_sched_se", "dl_app_se", "ul_app_se",
         ])
         self._csv_fd.flush()
         self.status_label.setText(f"logging to {self._csv_path}")
@@ -404,9 +490,13 @@ class MainWindow(QMainWindow):
         sv += [0.0] * (8 - len(sv))
         rsrp_per_ant = list(self._last_meas.get("rsrp_per_ant", []))[:4]
         rsrp_per_ant += [0] * (4 - len(rsrp_per_ant))
+        dl_sched_se = self._scheduled_se(self._last_meas)
+        dl_app_se = self._application_se(self._last_meas, "DL", "n_rb_dl")
+        ul_app_se = self._application_se(self._last_meas, "UL", "n_rb_ul")
         self._csv_writer.writerow([
             stamp,
             self._test_round,
+            self._iperf_direction,
             self._iperf_bps / 1e6,
             *sv,
             self._last_csi.get("capacity", 0.0),
@@ -436,6 +526,10 @@ class MainWindow(QMainWindow):
             self._last_meas.get("scs", 0),
             self._last_meas.get("nb_antennas_rx", 0),
             self._last_meas.get("wideband_cqi", 0),
+            self._last_meas.get("n_rb_ul", 0),
+            "" if dl_sched_se is None else dl_sched_se,
+            "" if dl_app_se is None else dl_app_se,
+            "" if ul_app_se is None else ul_app_se,
         ])
         self._csv_fd.flush()
 

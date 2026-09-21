@@ -85,7 +85,7 @@ rv, new_data_indicator, target_code_rate,
 bitrate_bps, dlsch_received, dlsch_errors, dlsch_fer,
 rsrp_dBm, rsrp_per_ant_dBm[4], rssi_dBm,
 wideband_sinr_dB, ssb_sinr_db_x10,
-n_rb_dl, subcarrier_spacing, freq_offset, nb_antennas_rx
+n_rb_dl, subcarrier_spacing, freq_offset, nb_antennas_rx, n_rb_ul
 ```
 
 ### 2.3 Write behavior
@@ -115,6 +115,7 @@ All files are under `gui/`.
 | `iperf_controller.py` | QThread running iperf3, appends to `gui/iperf.log`, parses `X bits/sec` lines |
 | `meas_reader.py` | Reads `/dev/shm/meas_dl` with `ctypes`, returns a dict of PDSCH/RF metrics |
 | `csi_reader.py` | Reads `/dev/shm/csi_rs_channel`, computes capacity, singular values, rank, condition number |
+| `spectral_efficiency.py` | Shared scheduled/application SE formulas for UE and gNB GUIs |
 | `plot_manager.py` | Three pyqtgraph panels: throughput, PDSCH metrics, CSI quality, plus the per-antenna RSRP bar chart |
 | `config.json` | `bs_ip`, `iperf_port`, `iperf_time`, `log_file`, `dl_reverse_client`, `snr_db` |
 | `requirements.txt` | `PyQt5`, `pyqtgraph`, `numpy` |
@@ -191,14 +192,15 @@ Created once when the GUI starts; one CSV file is used for the whole GUI run.
 Column layout:
 
 ```text
-timestamp, test_round, throughput_mbps,
+timestamp, test_round, iperf_direction, throughput_mbps,
 sv0 ... sv7, capacity, rank, condition_number,
 frame, slot, mcs, qm, tbs_bits, layers, nprb, nsymb, rv,
 new_data_indicator, target_code_rate, bitrate_bps,
 dlsch_received, dlsch_errors, bler,
 rsrp_dBm, rssi_dBm, sinr_dB, freq_offset_hz,
 rsrp_ant0_dBm, rsrp_ant1_dBm, rsrp_ant2_dBm, rsrp_ant3_dBm,
-n_rb_dl, scs, nb_antennas_rx, wideband_cqi_dB
+n_rb_dl, scs, nb_antennas_rx, wideband_cqi_dB,
+n_rb_ul, dl_sched_se, dl_app_se, ul_app_se
 ```
 
 `timestamp` is local wall-clock time in `%Y%m%d_%H%M%S_%f` format:
@@ -216,7 +218,31 @@ The counter resets to zero when the GUI process restarts.
 is appended as `wideband_cqi_dB` and is measured in integer dB. If SSB SINR is
 not available yet, `sinr_dB` is empty in CSV and shown as `N/A` in the GUI.
 
-### 4.3 `gui/record/gui_ue_log_<timestamp>/channel_<timestamp>.npy`
+### 4.3 UE spectral efficiency
+
+`iperf_direction` is `DL`, `UL`, or empty. Application SE is recorded only
+when the current iperf direction matches the link:
+
+```text
+dl_app_se = dl_iperf_bps / (n_rb_dl * 12 * scs_hz)
+ul_app_se = ul_iperf_bps / (n_rb_ul * 12 * scs_hz)
+```
+
+The UE snapshot stores `scs` in Hz. `n_rb_ul` is copied from
+`ue->frame_parms.N_RB_UL`. Application SE includes scheduling gaps, HARQ
+retransmissions, and transport/protocol overhead because it uses iperf3.
+
+The DL scheduling snapshot also provides the allocation-level metric:
+
+```text
+dl_sched_se = tbs_bits / (nprb * 12 * nsymb)
+```
+
+This metric does not use iperf. The UE SHM does not expose a UL PUSCH
+scheduling snapshot, so the UE CSV does not contain `ul_sched_se`; the gNB
+GUI records that metric.
+
+### 4.4 `gui/record/gui_ue_log_<timestamp>/channel_<timestamp>.npy`
 
 When `iperf.log` changes, the latest complex channel array used for capacity
 calculation is saved with `numpy.save()` inside the same-name folder as the CSV
@@ -448,7 +474,7 @@ stores it.
 - Read as `snr = hdr.snr_db_x10 / 10.0` (`gui/srs_reader.py:112`), displayed
   in the SRS status line as `SNR X.X dB`.
 
-## 9. gNB DL CSV recording variables
+## 9. gNB DL/UL CSV recording variables
 
 The gNB DL CSV row is written from `/dev/shm/gnb_meas_dl`. The scheduler
 snapshot is generated in `generate_dl_mac_pdu()`
@@ -459,7 +485,8 @@ snapshot is generated in `generate_dl_mac_pdu()`
 gNB MAC PDSCH dispatch
   |
   | mcs, Qm, TBS (bits), layers, PRBs, symbols,
-  | rv, NDI, code rate, CQI/RI/PMI, SINR, BLER
+  | rv, NDI, code rate, CQI/RI/PMI, SINR, BLER,
+  | active BWP PRBs and subcarrier spacing
   v
 /dev/shm/gnb_meas_dl
   |
@@ -482,16 +509,37 @@ The corrected DL mapping is:
 | `dl_nsymb` | `num_symbols` | `sched_pdsch->tda_info.nrOfSymbols` | symbols |
 | `dl_pmi_x1` / `dl_pmi_x2` | `pmi_x1` / `pmi_x2` | CSI report PMI fields | PMI |
 | `dl_n_rb_dl` | `n_rb_dl` | `sched_pdsch->bwp_info.bwpSize` | PRBs |
+| `dl_scs_khz` | `subcarrier_spacing_khz` | `15 << UE->current_DL_BWP.scs` | kHz |
+| `dl_sched_se` | computed in GUI | `dl_tbs / (dl_nprb * 12 * dl_nsymb)` | bit/s/Hz |
+| `dl_app_se` | computed in GUI | DL iperf throughput / active DL BWP bandwidth | bit/s/Hz |
+| `ul_nsymb` | `num_symbols` | `harq->sched_pusch.tda_info.nrOfSymbols` | symbols |
+| `ul_n_rb_ul` | `n_rb_ul` | `harq->sched_pusch.bwp_info.bwpSize` | PRBs |
+| `ul_scs_khz` | `subcarrier_spacing_khz` | `15 << UE->current_UL_BWP.scs` | kHz |
+| `ul_sched_se` | computed in GUI | `ul_tbs / (ul_nprb * 12 * ul_nsymb)` | bit/s/Hz |
+| `ul_app_se` | computed in GUI | UL iperf throughput / active UL BWP bandwidth | bit/s/Hz |
 
 The remaining DL columns (`dl_mcs`, `dl_nprb`, `dl_layers`, `dl_qm`,
 `dl_cqi`, `dl_sinr`, `dl_bler`) are read directly from the corresponding
 `gnb_dl_meas_shm_t` fields described in the full mapping under
 `doc/local-edit/measurements/gNB_gui_monitor.md`.
 
-After changing the C side, rebuild and restart `nr-gnb` so the shared-memory
-regions are recreated with the corrected layout:
+The application-level SE calculations are:
+
+```text
+dl_app_se = dl_throughput_mbps * 1e6
+            / (dl_n_rb_dl * 12 * dl_scs_khz * 1000)
+ul_app_se = ul_throughput_mbps * 1e6
+            / (ul_n_rb_ul * 12 * ul_scs_khz * 1000)
+```
+
+They include idle slots, failures, and protocol overhead. `iperf_direction`
+identifies which application SE is valid in each CSV row. Scheduled SE values
+do not use iperf and describe the sampled PDSCH/PUSCH allocation.
+
+After changing the C side, rebuild and restart `nr-gnb` and the UE. The SHM
+layouts now include gNB UL `subcarrier_spacing_khz` and UE `n_rb_ul`:
 
 ```bash
 cd cmake_targets
-./build_oai --gNB --build-everything
+./build_oai --gNB --nrUE --build-everything
 ```

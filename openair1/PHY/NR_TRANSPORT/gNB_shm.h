@@ -52,6 +52,7 @@ typedef struct __attribute__((packed)) {
   uint8_t   pmi_x1;
   uint8_t   pmi_x2;
   uint16_t  n_rb_dl;
+  uint32_t  subcarrier_spacing_khz;
 } gnb_dl_meas_shm_t;
 
 /* ---------- UL measurements shared memory ---------- */
@@ -78,6 +79,7 @@ typedef struct __attribute__((packed)) {
   uint8_t   tpmi;
   int16_t   rssi;
   uint16_t  n_rb_ul;
+  uint32_t  subcarrier_spacing_khz;
 } gnb_ul_meas_shm_t;
 
 /* ---------- SRS channel shared memory ---------- */

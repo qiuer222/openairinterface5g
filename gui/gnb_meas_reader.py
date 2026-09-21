@@ -42,6 +42,7 @@ class GnbDlShm(ctypes.Structure):
         ("pmi_x1",             ctypes.c_uint8),
         ("pmi_x2",             ctypes.c_uint8),
         ("n_rb_dl",            ctypes.c_uint16),
+        ("subcarrier_spacing_khz", ctypes.c_uint32),
     ]
 
 
@@ -72,6 +73,7 @@ class GnbUlShm(ctypes.Structure):
         ("tpmi",               ctypes.c_uint8),
         ("rssi",               ctypes.c_int16),
         ("n_rb_ul",            ctypes.c_uint16),
+        ("subcarrier_spacing_khz", ctypes.c_uint32),
     ]
 
 
@@ -141,6 +143,7 @@ class GnbDlReader:
             "pmi_x1": m.pmi_x1,
             "pmi_x2": m.pmi_x2,
             "n_rb_dl": m.n_rb_dl,
+            "scs_khz": m.subcarrier_spacing_khz,
             "received": received,
             "errors": errors,
         }
@@ -204,6 +207,7 @@ class GnbUlReader:
             "tpmi": None if m.tpmi == GNB_TPMI_INVALID else m.tpmi,
             "rssi": m.rssi,
             "n_rb_ul": m.n_rb_ul,
+            "scs_khz": m.subcarrier_spacing_khz,
             "received": received,
             "errors": errors,
         }

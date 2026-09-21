@@ -1218,6 +1218,8 @@ static void generate_dl_mac_pdu(gNB_MAC_INST *mac,
   m.pmi_x1 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x1;
   m.pmi_x2 = sched_ctrl->CSI_report.cri_ri_li_pmi_cqi_report.pmi_x2;
   m.n_rb_dl = sched_pdsch->bwp_info.bwpSize;
+  DevAssert(UE->current_DL_BWP.scs >= 0 && UE->current_DL_BWP.scs <= 4);
+  m.subcarrier_spacing_khz = 15u << UE->current_DL_BWP.scs;
   gNB_shm_write_dl_sched(&m);
 }
 

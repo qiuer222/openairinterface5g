@@ -82,6 +82,7 @@ typedef struct __attribute__((packed)) {
   uint32_t  subcarrier_spacing;
   int32_t   freq_offset;           /* Hz                            */
   uint8_t   nb_antennas_rx;
+  uint16_t  n_rb_ul;               /* UL carrier bandwidth in PRBs  */
 } meas_dl_shm_t;
 
 /* ---------- API ---------- */

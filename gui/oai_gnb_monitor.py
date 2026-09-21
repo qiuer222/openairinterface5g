@@ -39,6 +39,11 @@ from gui.gnb_meas_reader import GnbDlReader, GnbUlReader
 from gui.iperf_controller import IperfController, parse_iperf3_line
 from gui.plot_manager import GnbPlotManager
 from gui.srs_reader import SrsReader
+from gui.spectral_efficiency import (
+    application_spectral_efficiency,
+    bandwidth_hz,
+    scheduled_spectral_efficiency,
+)
 
 
 DEFAULT_GNB_CONFIG = {
@@ -85,6 +90,9 @@ class GnbMainWindow(QMainWindow):
         self._log_path = self._resolve_log_path(config.get("log_file", DEFAULT_GNB_CONFIG["log_file"]))
         self._log_state: Optional[tuple[int, int]] = None
         self._iperf_bps: float = 0.0
+        self._iperf_direction = ""
+        self._iperf_dl_bps: float = 0.0
+        self._iperf_ul_bps: float = 0.0
         self._last_dl: Dict = {}
         self._last_ul: Dict = {}
         self._last_srs: Dict = {}
@@ -179,6 +187,7 @@ class GnbMainWindow(QMainWindow):
         self.setCentralWidget(central)
 
     def _start_ul(self) -> None:
+        self._prepare_iperf_direction("UL")
         self._log_based_test_round = True
         cfg = self._ui_config()
         self.status_label.setText(
@@ -187,6 +196,7 @@ class GnbMainWindow(QMainWindow):
         self.iperf.start_ul_server(cfg["port"], cfg["log_file"])
 
     def _start_dl(self) -> None:
+        self._prepare_iperf_direction("DL")
         self._test_round += 1
         self._log_based_test_round = False
         cfg = self._ui_config()
@@ -198,7 +208,24 @@ class GnbMainWindow(QMainWindow):
 
     def _stop_iperf(self) -> None:
         self.iperf.stop()
+        self._reset_iperf_throughput()
         self.status_label.setText("iperf3 stopped")
+
+    def _prepare_iperf_direction(self, direction: str) -> None:
+        self._iperf_direction = direction
+        self._iperf_bps = 0.0
+        if direction == "DL":
+            self._iperf_dl_bps = 0.0
+        elif direction == "UL":
+            self._iperf_ul_bps = 0.0
+
+    def _reset_iperf_throughput(self) -> None:
+        if self._iperf_direction == "DL":
+            self._iperf_dl_bps = 0.0
+        elif self._iperf_direction == "UL":
+            self._iperf_ul_bps = 0.0
+        self._iperf_bps = 0.0
+        self._iperf_direction = ""
 
     def _restart_gui(self) -> None:
         self._stop_resources()
@@ -224,8 +251,9 @@ class GnbMainWindow(QMainWindow):
         }
 
     def _refresh(self) -> None:
+        direction = self._iperf_direction or "--"
         self.throughput_label.setText(
-            f"Throughput: {self._iperf_bps / 1e6:.1f} Mbps"
+            f"Throughput [{direction}]: {self._iperf_bps / 1e6:.1f} Mbps"
         )
 
         dl = self.dl_reader.read()
@@ -251,6 +279,10 @@ class GnbMainWindow(QMainWindow):
 
         t = time.monotonic() - self._t0
         dl_sinr = self._last_dl.get("sinr")
+        dl_sched_se = self._scheduled_se(self._last_dl)
+        dl_app_se = self._application_se(self._last_dl, "DL", "n_rb_dl")
+        ul_sched_se = self._scheduled_se(self._last_ul)
+        ul_app_se = self._application_se(self._last_ul, "UL", "n_rb_ul")
         values: Dict[str, float] = {"throughput": self._iperf_bps / 1e6}
         values.update({
             "dl_sinr": float(dl_sinr) if dl_sinr is not None else 0.0,
@@ -258,6 +290,8 @@ class GnbMainWindow(QMainWindow):
             "dl_mcs": float(self._last_dl.get("mcs", 0)),
             "dl_nprb": float(self._last_dl.get("nprb", 0)),
             "dl_tbs": float(self._last_dl.get("tbs", 0)),
+            "dl_sched_se": float(dl_sched_se or 0.0),
+            "dl_app_se": float(dl_app_se or 0.0),
         })
         values.update({
             "ul_sinr": float(self._last_ul.get("sinr", 0)),
@@ -265,6 +299,8 @@ class GnbMainWindow(QMainWindow):
             "ul_mcs": float(self._last_ul.get("mcs", 0)),
             "ul_nprb": float(self._last_ul.get("nprb", 0)),
             "ul_tbs": float(self._last_ul.get("tbs", 0)),
+            "ul_sched_se": float(ul_sched_se or 0.0),
+            "ul_app_se": float(ul_app_se or 0.0),
         })
         values.update({
             "srs_capacity": float(self._last_srs.get("capacity", 0)),
@@ -281,6 +317,14 @@ class GnbMainWindow(QMainWindow):
     def _update_dl_text(self, m: Dict) -> None:
         sinr = m.get("sinr")
         sinr_text = "N/A" if sinr is None else f"{sinr:.1f} dB"
+        bwp_bandwidth_hz = bandwidth_hz(
+            int(m.get("n_rb_dl", 0)),
+            int(m.get("scs_khz", 0)),
+        )
+        scheduled_se_text = self._format_se(self._scheduled_se(m))
+        application_se_text = self._format_se(
+            self._application_se(m, "DL", "n_rb_dl")
+        )
         lines = [
             f"Frame: {m.get('frame', 0)}  Slot: {m.get('slot', 0)}  "
             f"RNTI: {int(m.get('rnti', 0)):#06x}",
@@ -292,12 +336,24 @@ class GnbMainWindow(QMainWindow):
             f"TBS (bits): {m.get('tbs', 0)}",
             f"RV: {m.get('rv', 0)}  NDI: {m.get('ndi', 0)}  "
             f"PMI: ({m.get('pmi_x1', 0)},{m.get('pmi_x2', 0)})",
+            f"SCS: {m.get('scs_khz', 0)} kHz  "
+            f"BWP BW: {bwp_bandwidth_hz / 1e6:.2f} MHz",
+            f"Sched SE: {scheduled_se_text} bit/s/Hz  "
+            f"App SE: {application_se_text} bit/s/Hz",
         ]
         self.dl_label.setText("\n".join(lines))
 
     def _update_ul_text(self, m: Dict) -> None:
         tpmi = m.get("tpmi")
         tpmi_text = "N/A" if tpmi is None else str(tpmi)
+        bw = bandwidth_hz(
+            int(m.get("n_rb_ul", 0)),
+            int(m.get("scs_khz", 0)),
+        )
+        scheduled_se_text = self._format_se(self._scheduled_se(m))
+        application_se_text = self._format_se(
+            self._application_se(m, "UL", "n_rb_ul")
+        )
         lines = [
             f"Frame: {m.get('frame', 0)}  Slot: {m.get('slot', 0)}  "
             f"RNTI: {int(m.get('rnti', 0)):#06x}",
@@ -309,8 +365,40 @@ class GnbMainWindow(QMainWindow):
             f"RV: {m.get('rv', 0)}  NDI: {m.get('ndi', 0)}  "
             f"UL CQI: {m.get('ul_cqi', 0)}  TPMI: {tpmi_text}  "
             f"RSSI: {m.get('rssi', 0)}",
+            f"SCS: {m.get('scs_khz', 0)} kHz  BWP BW: {bw / 1e6:.2f} MHz",
+            f"Sched SE: {scheduled_se_text} bit/s/Hz  "
+            f"App SE: {application_se_text} bit/s/Hz",
         ]
         self.ul_label.setText("\n".join(lines))
+
+    @staticmethod
+    def _scheduled_se(m: Dict) -> Optional[float]:
+        return scheduled_spectral_efficiency(
+            int(m.get("tbs", 0)),
+            int(m.get("nprb", 0)),
+            int(m.get("nsymb", 0)),
+        )
+
+    def _application_se(
+        self,
+        m: Dict,
+        direction: str,
+        n_rb_key: str,
+    ) -> Optional[float]:
+        if self._iperf_direction != direction:
+            return None
+        throughput_bps = (
+            self._iperf_dl_bps if direction == "DL" else self._iperf_ul_bps
+        )
+        return application_spectral_efficiency(
+            throughput_bps,
+            int(m.get(n_rb_key, 0)),
+            int(m.get("scs_khz", 0)),
+        )
+
+    @staticmethod
+    def _format_se(value: Optional[float]) -> str:
+        return "N/A" if value is None else f"{value:.3f}"
 
     def _update_srs_text(self, m: Dict) -> None:
         self.srs_label.setText(
@@ -323,6 +411,10 @@ class GnbMainWindow(QMainWindow):
 
     def _on_iperf_throughput(self, bps: float) -> None:
         self._iperf_bps = bps
+        if self._iperf_direction == "DL":
+            self._iperf_dl_bps = bps
+        elif self._iperf_direction == "UL":
+            self._iperf_ul_bps = bps
 
     def _on_iperf_log(self, line: str) -> None:
         if self._log_based_test_round and "Accepted connection from" in line:
@@ -396,14 +488,16 @@ class GnbMainWindow(QMainWindow):
         self._csv_writer = csv.writer(self._csv_fd)
         self._reset_log_state()
         self._csv_writer.writerow([
-            "timestamp", "test_round", "throughput_mbps",
+            "timestamp", "test_round", "iperf_direction", "throughput_mbps",
             "ul_frame", "ul_slot", "ul_rnti", "ul_bler", "ul_sinr",
             "ul_mcs", "ul_nprb", "ul_layers", "ul_qm", "ul_tbs",
+            "ul_nsymb", "ul_n_rb_ul", "ul_scs_khz", "ul_sched_se", "ul_app_se",
             "ul_timing_advance", "ul_cqi", "ul_tpmi",
             "dl_frame", "dl_slot", "dl_rnti", "dl_bler", "dl_sinr",
             "dl_mcs", "dl_nprb", "dl_layers", "dl_qm", "dl_tbs",
             "dl_cqi", "dl_ri", "dl_nsymb", "dl_rv", "dl_ndi",
             "dl_target_code_rate", "dl_pmi_x1", "dl_pmi_x2", "dl_n_rb_dl",
+            "dl_scs_khz", "dl_sched_se", "dl_app_se",
             "srs_capacity", "srs_rank", "srs_condition", "srs_snr",
         ])
         self._csv_fd.flush()
@@ -417,14 +511,22 @@ class GnbMainWindow(QMainWindow):
         dl = self._last_dl
         ul = self._last_ul
         srs = self._last_srs
+        dl_sched_se = self._scheduled_se(dl)
+        dl_app_se = self._application_se(dl, "DL", "n_rb_dl")
+        ul_sched_se = self._scheduled_se(ul)
+        ul_app_se = self._application_se(ul, "UL", "n_rb_ul")
         self._csv_writer.writerow([
             stamp,
             self._test_round,
+            self._iperf_direction,
             self._iperf_bps / 1e6,
             ul.get("frame", 0), ul.get("slot", 0), ul.get("rnti", 0),
             ul.get("bler", 0), ul.get("sinr", 0),
             ul.get("mcs", 0), ul.get("nprb", 0), ul.get("layers", 0),
             ul.get("qm", 0), ul.get("tbs", 0),
+            ul.get("nsymb", 0), ul.get("n_rb_ul", 0), ul.get("scs_khz", 0),
+            "" if ul_sched_se is None else ul_sched_se,
+            "" if ul_app_se is None else ul_app_se,
             ul.get("timing_advance", 0), ul.get("ul_cqi", 0),
             "" if ul.get("tpmi") is None else ul.get("tpmi"),
             dl.get("frame", 0), dl.get("slot", 0), dl.get("rnti", 0),
@@ -434,6 +536,9 @@ class GnbMainWindow(QMainWindow):
             dl.get("nsymb", 0), dl.get("rv", 0), dl.get("ndi", 0),
             dl.get("target_code_rate", 0),
             dl.get("pmi_x1", 0), dl.get("pmi_x2", 0), dl.get("n_rb_dl", 0),
+            dl.get("scs_khz", 0),
+            "" if dl_sched_se is None else dl_sched_se,
+            "" if dl_app_se is None else dl_app_se,
             srs.get("capacity", 0), srs.get("rank", 0),
             srs.get("condition_number", 0), srs.get("snr", 0),
         ])

@@ -721,6 +721,8 @@ static void handle_nr_ul_harq(gNB_MAC_INST *nrmac, NR_UE_info_t *UE, rnti_t rnti
                ? (uint8_t)harq->sched_pusch.tpmi
                : GNB_TPMI_INVALID;
   m.n_rb_ul = harq->sched_pusch.bwp_info.bwpSize;
+  DevAssert(UE->current_UL_BWP.scs >= 0 && UE->current_UL_BWP.scs <= 4);
+  m.subcarrier_spacing_khz = 15u << UE->current_UL_BWP.scs;
   gNB_shm_write_ul_meas(&m, !crc_status);
 
   harq->feedback_slot = -1;

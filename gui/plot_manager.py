@@ -120,7 +120,17 @@ class PlotManager(QWidget):
         self.throughput = MetricPlot("Throughput", ["throughput"])
         self.pdsch = MetricPlot(
             "PDSCH Metrics",
-            ["rsrp", "bler", "sinr", "wideband_cqi", "mcs", "nprb"],
+            [
+                "rsrp",
+                "bler",
+                "sinr",
+                "wideband_cqi",
+                "mcs",
+                "nprb",
+                "dl_sched_se",
+                "dl_app_se",
+                "ul_app_se",
+            ],
         )
         self.csi = MetricPlot(
             "CSI Channel Quality",
@@ -139,11 +149,27 @@ class GnbPlotManager(QWidget):
         self.throughput = MetricPlot("Throughput", ["throughput"])
         self.dl = MetricPlot(
             "DL Measurements",
-            ["dl_sinr", "dl_bler", "dl_mcs", "dl_nprb", "dl_tbs"],
+            [
+                "dl_sinr",
+                "dl_bler",
+                "dl_mcs",
+                "dl_nprb",
+                "dl_tbs",
+                "dl_sched_se",
+                "dl_app_se",
+            ],
         )
         self.ul = MetricPlot(
             "UL Measurements",
-            ["ul_sinr", "ul_bler", "ul_mcs", "ul_nprb", "ul_tbs"],
+            [
+                "ul_sinr",
+                "ul_bler",
+                "ul_mcs",
+                "ul_nprb",
+                "ul_tbs",
+                "ul_sched_se",
+                "ul_app_se",
+            ],
         )
         self.srs = MetricPlot(
             "SRS Channel",
