@@ -91,6 +91,43 @@ def active_subcarriers(h: np.ndarray) -> np.ndarray:
     return np.flatnonzero(finite & (energy > EPS))
 
 
+def _subcarrier_energy_metrics(
+    energy: np.ndarray, subcarrier_indices: np.ndarray
+) -> Dict:
+    """Summarize total channel energy across subcarriers."""
+    energy = np.asarray(energy, dtype=float)
+    subcarrier_indices = np.asarray(subcarrier_indices)
+    if energy.ndim != 1 or energy.size == 0:
+        raise ValueError("subcarrier energy must be a non-empty 1D array")
+    if subcarrier_indices.shape != energy.shape:
+        raise ValueError(
+            "subcarrier indices must have the same shape as subcarrier energy"
+        )
+
+    energy_db = 10.0 * np.log10(np.maximum(energy, EPS))
+    linear_stats = _stats(energy)
+    db_stats = _stats(energy_db)
+    peak_index = int(np.argmax(energy))
+    minimum_index = int(np.argmin(energy))
+    mean_energy = linear_stats["mean"]
+    return {
+        "linear": linear_stats,
+        "db": db_stats,
+        "coefficient_of_variation": float(
+            linear_stats["std"] / max(abs(mean_energy), EPS)
+        ),
+        "peak_to_average_db": float(
+            10.0
+            * np.log10(
+                max(linear_stats["max"] / max(abs(mean_energy), EPS), EPS)
+            )
+        ),
+        "peak_to_trough_db": float(db_stats["max"] - db_stats["min"]),
+        "peak_subcarrier": int(subcarrier_indices[peak_index]),
+        "minimum_subcarrier": int(subcarrier_indices[minimum_index]),
+    }
+
+
 def _stats(values: np.ndarray) -> Dict[str, float]:
     values = np.asarray(values, dtype=float)
     values = values[np.isfinite(values)]
@@ -534,6 +571,12 @@ def analyze_channel(
     active = active_subcarriers(h)
     if active.size == 0:
         raise ValueError("channel has no active subcarriers")
+    subcarrier_energy = np.sum(
+        np.abs(h[:, :, active]) ** 2, axis=(0, 1)
+    )
+    subcarrier_energy_metrics = _subcarrier_energy_metrics(
+        subcarrier_energy, active
+    )
     fft_size = h.shape[-1]
     if subcarrier_offset is None:
         subcarrier_offset = (
@@ -598,12 +641,14 @@ def analyze_channel(
             "active_last": int(active[-1]),
         },
         "paths": paths,
+        "subcarrier_energy": subcarrier_energy_metrics,
         "mimo": mimo,
         "time_domain": time_domain,
     }
     plot_data = {
         "h": h,
         "active": active,
+        "subcarrier_energy": subcarrier_energy,
         "singular_values": sv,
         "condition": condition,
         "impulse": shifted_taps,
@@ -657,6 +702,31 @@ def _format_report(metrics: Dict) -> str:
             f"coherence50={path['coherence_50_hz'] / 1e3:.1f} kHz "
             f"K-like={path['rician_like_k_db']:.2f} dB"
         )
+
+    energy = metrics["subcarrier_energy"]
+    lines.extend(
+        [
+            "",
+            "=== Subcarrier Energy ===",
+            (
+                f"total energy across rx/tx: "
+                f"mean={energy['linear']['mean']:.6g} "
+                f"std={energy['linear']['std']:.6g} "
+                f"min={energy['linear']['min']:.6g} "
+                f"max={energy['linear']['max']:.6g}"
+            ),
+            (
+                f"variation: CV={energy['coefficient_of_variation']:.4f} "
+                f"ripple_std={energy['db']['std']:.2f} dB "
+                f"peak/average={energy['peak_to_average_db']:.2f} dB "
+                f"peak/trough={energy['peak_to_trough_db']:.2f} dB"
+            ),
+            (
+                f"peak subcarrier={energy['peak_subcarrier']} "
+                f"minimum subcarrier={energy['minimum_subcarrier']}"
+            ),
+        ]
+    )
 
     lines.extend(["", "=== MIMO / Singular Values ==="])
     for idx, singular in enumerate(metrics["mimo"]["singular_values"]):
@@ -743,6 +813,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     condition = plot_data["condition"]
     impulse = plot_data["impulse"]
     delays = plot_data["delays"]
+    subcarrier_energy = plot_data["subcarrier_energy"]
     outputs: List[str] = []
 
     fig, axes = plt.subplots(
@@ -758,6 +829,27 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
             axes[rx, tx].set_xlabel("subcarrier")
     fig.tight_layout()
     path = os.path.join(output_dir, "channel_magnitude.png")
+    fig.savefig(path, dpi=160)
+    plt.close(fig)
+    outputs.append(path)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    energy_db = 10.0 * np.log10(np.maximum(subcarrier_energy, EPS))
+    ax.plot(active, energy_db, color="#1f77b4", linewidth=1.5)
+    ax.axhline(
+        float(np.mean(energy_db)),
+        color="#d62728",
+        linestyle="--",
+        linewidth=1.0,
+        label="mean",
+    )
+    ax.set_title("Total channel energy across rx/tx paths")
+    ax.set_xlabel("subcarrier")
+    ax.set_ylabel("channel energy (dB)")
+    ax.grid(alpha=0.25)
+    ax.legend()
+    fig.tight_layout()
+    path = os.path.join(output_dir, "channel_subcarrier_energy.png")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)

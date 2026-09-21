@@ -61,6 +61,38 @@ class AnalyzeChannelTests(unittest.TestCase):
         self.assertAlmostEqual(
             metrics["mimo"]["condition_number"]["mean"], 2.0, places=8
         )
+        energy = metrics["subcarrier_energy"]
+        self.assertAlmostEqual(energy["linear"]["mean"], 1.25, places=8)
+        self.assertAlmostEqual(energy["linear"]["std"], 0.0, places=8)
+        self.assertEqual(energy["peak_subcarrier"], 0)
+        self.assertEqual(energy["minimum_subcarrier"], 0)
+
+    def test_subcarrier_energy_tracks_frequency_selectivity(self):
+        h = np.zeros((1, 1, 8), dtype=np.complex128)
+        h[0, 0, 2:6] = np.array([1.0, 2.0, 0.5, 1.5])
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "channel_selective.npy")
+            np.save(path, h)
+            metrics, _ = analyze_channel(
+                path,
+                kind="csi",
+                n_rb=1,
+                subcarrier_offset=0,
+            )
+        energy = metrics["subcarrier_energy"]
+        self.assertAlmostEqual(energy["linear"]["mean"], 1.875, places=8)
+        self.assertEqual(energy["peak_subcarrier"], 3)
+        self.assertEqual(energy["minimum_subcarrier"], 4)
+        self.assertAlmostEqual(
+            energy["peak_to_average_db"],
+            10.0 * np.log10(4.0 / 1.875),
+            places=8,
+        )
+        self.assertAlmostEqual(
+            energy["peak_to_trough_db"],
+            10.0 * np.log10(4.0 / 0.25),
+            places=8,
+        )
 
     def test_two_tap_channel_recovers_sparse_delays(self):
         fft_size = 32
@@ -133,6 +165,16 @@ class AnalyzeChannelTests(unittest.TestCase):
                         output_dir,
                         "figures",
                         "channel_magnitude.png",
+                    )
+                )
+                > 0
+            )
+            self.assertTrue(
+                os.path.getsize(
+                    os.path.join(
+                        output_dir,
+                        "figures",
+                        "channel_subcarrier_energy.png",
                     )
                 )
                 > 0
