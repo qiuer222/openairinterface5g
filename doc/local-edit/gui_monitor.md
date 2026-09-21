@@ -400,6 +400,9 @@ The two monitors record different SNR values. They are not the same quantity;
 each is defined below with its source in the OAI code and the CSV column that
 stores it.
 
+The complete signal-energy, noise-energy, and SINR derivation is in
+`doc/local-edit/measurements/noise_signal_sinr.md`.
+
 ### 8.1 UE monitor - `sinr_dB`
 
 - CSV column: `sinr_dB`

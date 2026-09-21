@@ -7,6 +7,9 @@ the UE/gNB performance monitors. It also explains what the `c16_t` samples in
 `rxdataF`, `csi_rs_estimated_channel_freq`, and `srs_estimated_channel_freq`
 actually represent.
 
+For the detailed signal-energy, noise-energy, and per-receiver SINR derivation,
+see `doc/local-edit/measurements/noise_signal_sinr.md`.
+
 ## 2. Different SNR values in OAI
 
 OAI computes SNR in several places. They all use dB, but they measure different
@@ -39,6 +42,27 @@ UE->mac_stats.num_sinr_meas
 
 `SINRx10` is SINR multiplied by 10 to avoid fractional dB.
 
+The implementation uses:
+
+```text
+P_rsrp = average |rxdataF|^2 over SSS tones and RX antennas
+P_n_ant = average |rxdataF|^2 over 8 tones on each side of the SSS spectrum
+P_n_tot = sum over RX antennas of P_n_ant
+P_n_avg = 0.5 * P_n_avg_old + 0.5 * P_n_tot
+P_signal = max(P_rsrp - P_n_avg, 0)
+SSB_SINR_x10 = dB_fixed_x10(P_signal) - dB_fixed_x10(P_n_avg)
+```
+
+This is the value exposed as `ssb_sinr_dB`. The subtraction is performed in
+the linear energy domain before converting to dB. The SSS edge tones supply a
+noise-plus-interference estimate; OAI does not maintain a separate interference
+covariance for this value.
+
+Scaling caveat: `P_rsrp` is averaged over RX antennas and SSS tones, while
+`P_n_tot` is summed over RX antennas before filtering. For more than one RX
+antenna this is not the same antenna normalization. Treat the value as the
+OAI SSB SINR implementation, not as a strictly calibrated multi-RX SINR.
+
 The MAC usage message prints the average only when `num_sinr_meas > 0`:
 
 ```text
@@ -64,7 +88,18 @@ reported separately as `wideband_cqi_dB`.
 
 ### 2.2 gNB PUCCH SNR
 
-For PUCCH power control, the gNB converts the UE-reported PUCCH CQI to SNR:
+For PUCCH format 0/1, the gNB calculates the received PUCCH resource energy
+and compares it with the unused-RB noise floor:
+
+```text
+P_pucch = average |rxdataF|^2 over PUCCH symbols and spatial streams
+N0_dB = max(n0_subband_power_tot_dB[hop0],
+            n0_subband_power_tot_dB[hop1])
+SNR_x10 = 10 * dB_fixed(P_pucch) - 10 * N0_dB
+ul_cqi = clamp((640 + SNR_x10) / 5, 0, 255)
+```
+
+For PUCCH power control, the MAC reconstructs:
 
 ```text
 pucch_snrx10 = ul_cqi * 5 - 640
@@ -82,7 +117,10 @@ This is the `SNR 16.1 dB` value shown in the MAC usage line:
 pucch0_DTX 0 (SNR 16.1+1.1 dB)
 ```
 
-It is a PUCCH power-control estimate, not CSI SINR.
+It is a PUCCH power-control estimate, not CSI SINR. The PUCCH energy includes
+received signal plus noise because it is measured before sequence-based
+separation. PUCCH format 2 SNR handling is explicitly marked as not correct in
+the MAC code and should not be used as a calibrated metric.
 
 ### 2.3 gNB PUSCH SNR
 
@@ -92,6 +130,25 @@ For PUSCH, the gNB PHY estimates:
 SNRtimes10 = dB_fixed_x10(pusch->ulsch_power_tot)
              - dB_fixed_x10(pusch->ulsch_noise_power_tot)
 ```
+
+The PHY reports this as a CQI:
+
+```text
+ul_cqi = clamp((640 + SNRtimes10) / 5, 0, 255)
+```
+
+The MAC reconstructs and filters the PUSCH SNR:
+
+```text
+pusch_snrx10 = ul_cqi * 5 - 640 - 10 * phr_txpower_calc
+avg_snr = 0.975 * avg_snr + 0.025 * pusch_snrx10 / 10
+```
+
+`phr_txpower_calc` removes the delta-MCS power offset when that mode is
+enabled. `avg_snr` is the filtered value stored in `pusch_pc.avg_snr`. The
+power-control decision can additionally include `tpc_in_flight` through
+`nr_mac_get_snr()`, but the gNB GUI records `avg_snr` rather than that
+instantaneous adjusted value.
 
 The MAC usage line shows the filtered PUSCH power-control SNR:
 
@@ -118,7 +175,75 @@ noise_power_avg  = mean SRS noise power
 
 This is stored in the SRS shared-memory header as `snr_db_x10`.
 
-### 2.5 Analysis "effective SNR"
+The wideband SRS noise calculation contains an additional division by the
+number of SRS subcarriers:
+
+```text
+P_noise_code =
+  (1 / N_sc) * sum_k |noise_k|^2 / N_sc
+
+P_noise_avg = average over RX antennas of P_noise_code
+SRS_SNR_dB = dB_fixed(P_signal_avg)
+           - dB_fixed(max(P_noise_avg, 1))
+```
+
+The per-RB SRS SNR instead uses the average noise energy of 12 tones without
+the extra `1 / N_sc`. Therefore the wideband SRS SNR and `snr_per_rb` are not
+on identical normalization. The gNB GUI `srs_snr` uses the wideband value.
+
+### 2.5 UE wideband CQI proxy
+
+The UE `nr_ue_measurements()` path computes:
+
+```text
+P_rx_tot = sum over TX ports and RX antennas
+           of average |dl_ch_estimates|^2
+P_n_tot = sum over RX antennas of the SSS-edge noise estimate
+wideband_cqi_tot = dB_fixed(P_rx_tot) - dB_fixed(P_n_tot)
+wideband_cqi_avg = dB_fixed(P_rx_avg) - dB_fixed(P_n_avg)
+```
+
+The measurement and noise filters use `K1 = K2 = 512`, equivalent to a 0.5
+first-order IIR update. This value compares DL channel-estimate energy with an
+SSS-derived noise estimate. It is not SSB SINR and is not an absolute SNR.
+
+### 2.6 UE PDSCH MMSE noise variance
+
+For PDSCH channel estimation, OAI estimates a receiver noise variance from the
+difference between the LS DMRS estimate and the interpolated/filtered channel:
+
+```text
+nvar_estimate =
+  sum |H_LS(k) - H_est(k)|^2
+  / (number_of_estimates * number_of_RX_antennas)
+```
+
+The value is used to regularize the MMSE receiver:
+
+```text
+H^H H + nvar * I
+```
+
+This `nvar` is a receiver-internal MMSE regularization term. It is not the
+same as the SSS-edge noise power and is not exposed as an SINR in the GUI.
+The current interpolation functions overwrite the per-call `nvar` for each RX
+antenna, and `nr_ue_pdsch_procedures()` performs additional averaging by
+symbols, layers, and RX antennas. Use this value only as an implementation
+parameter, not as calibrated noise power.
+
+### 2.7 Summary
+
+| Metric | Signal estimate | Noise/interference estimate | Main use |
+|---|---|---|---|
+| gNB PUSCH instantaneous SNR | allocated PUSCH RE energy | unused-RB `n0_subband_power` | PHY CQI and UL power control |
+| gNB PUSCH `ul_sinr` | filtered PUSCH SNR | same unused-RB estimate | gNB GUI UL panel |
+| gNB PUCCH SNR | received PUCCH resource energy | unused-RB `n0_subband_power_tot_dB` | PUCCH power control |
+| gNB SRS SNR | interpolated SRS channel energy | unoccupied SRS-tone noise | SRS GUI and SRS scheduling |
+| UE SSB SINR | SSS/SSB RSRP energy | SSS edge-tone noise | UE and gNB DL SINR reports |
+| UE wideband CQI | PDSCH channel-estimate energy | SSS edge-tone noise | legacy wideband proxy |
+| UE PDSCH `nvar` | LS-vs-filtered channel residual | DMRS estimation residual | PDSCH MMSE regularization |
+
+### 2.8 Analysis "effective SNR"
 
 Offline analysis often uses:
 

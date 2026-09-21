@@ -31,6 +31,9 @@ state but do not write `gnb_meas_dl`. UL measurements are written from
 `gNB_scheduler_ulsch.c` when UL HARQ CRC feedback is processed. The SRS
 channel is written from `phy_procedures_nr_gNB.c` after SRS channel estimation.
 
+The signal-energy, noise-energy, and SINR definitions used by these fields are
+collected in `doc/local-edit/measurements/noise_signal_sinr.md`.
+
 ## 3. GUI
 
 Run from the repository root:
@@ -253,7 +256,7 @@ UL fields are written by `handle_nr_ul_harq()` in
 | `ul_slot` | `slot` | `harq->sched_pusch.slot` | PUSCH slot |
 | `ul_rnti` | `rnti` | `rnti` argument from CRC indication | RNTI |
 | `ul_bler` | `bler_x1000` | `sched_ctrl->ul_bler_stats.bler * 1000` | BLER in percent after Python `/10` |
-| `ul_sinr` | `sinr_db_x10` | `sched_ctrl->pusch_pc.avg_snr * 10` | SINR in dB after Python `/10` |
+| `ul_sinr` | `sinr_db_x10` | `sched_ctrl->pusch_pc.avg_snr * 10` | filtered PUSCH SNR in dB after Python `/10` |
 | `ul_mcs` | `mcs` | `harq->sched_pusch.mcs` | UL MCS |
 | `ul_nprb` | `num_rbs` | `harq->sched_pusch.rbSize` | allocated PRBs |
 | `ul_layers` | `num_layers` | `harq->sched_pusch.nrOfLayers` | scheduled UL layers |

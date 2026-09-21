@@ -12,6 +12,9 @@ The GUI reads `/dev/shm/meas_dl`. The shared-memory struct now carries both:
 - `rsrp_per_ant_dBm[4]`: the same SS-RSRP calculation applied separately to
   each active UE RX antenna.
 
+The relationship between SS-RSRP energy, SSS edge-tone noise, and SSB SINR is
+documented in `doc/local-edit/measurements/noise_signal_sinr.md`.
+
 ## 2. How OAI calculates the aggregate SS-RSRP
 
 The serving-cell RSRP is computed in
