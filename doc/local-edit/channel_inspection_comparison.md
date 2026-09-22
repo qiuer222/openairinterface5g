@@ -11,7 +11,7 @@ Three commands are provided:
 | Command | Purpose |
 |---------|---------|
 | `gui/analyze_channel.py` | Analyze one CSI-RS/SRS `.npy` snapshot in frequency, time, MIMO, and capacity domains |
-| `gui/npy_to_rfsim_bin.py` | Convert `.npy` to sparse tap `.bin`; prints input analysis during conversion |
+| `gui/npy_to_rfsim_bin.py` | Convert one `.npy` slot to frequency-domain `FDCH` replay format |
 | `gui/compare_channels.py` | Compare two same-kind channel recordings slot-by-slot |
 
 The common metrics/plotting code lives in `gui/channel_metrics.py`.
@@ -60,44 +60,24 @@ See [channel_single_file_analysis.md](channel_single_file_analysis.md) for the
 full command examples, generated-file descriptions, figure interpretation, and
 metric definitions.
 
-## Converter analysis
+## Converter verification
 
-Every `.npy → .bin` conversion prints:
-
-- channel dimensions and active subcarrier range/count;
-- per-path RMS amplitude;
-- per-subcarrier singular-value statistics and mean condition number;
-- effective rank histogram;
-- retained sparse taps per path: delays, magnitudes, and frequency fit error.
-
-The sparse tap report shows only the taps actually written to the file, not all
-dense LS candidates. For the checked-in SRS example:
-
-```text
-slot 0: active=1248 [388..1635]
-  rx0-tx0: n=1 delays=[0] |tap|=[0.989] fit_rmse=0.0095
-```
-
-This means one delay-0 tap is kept for that path; other weak candidate taps
-were pruned.
-
-To keep detailed reports for every slot and generate figures, add
-`--analysis-dir`:
+Every conversion writes one slot of complex64 H data in physical FFT-bin order
+and then verifies the resulting header and payload. The converter does not
+perform sparse-tap analysis. Use `gui/analyze_channel.py` on the source `.npy`
+when detailed channel metrics or figures are needed.
 
 ```bash
 .venv/bin/python gui/npy_to_rfsim_bin.py \
   --kind srs --n-rb 106 --scs 30000 \
   gui/record/gnb_log_20260806_212400/srs_20260806_212401_061474.npy \
-  --output /tmp/srs_channel.bin \
-  --analysis-dir /tmp/channel_analysis
+  --output /tmp/srs_channel.bin
 ```
 
-Outputs:
+Verify it later with:
 
-```text
-/tmp/channel_analysis/conversion_channel_analysis.json
-/tmp/channel_analysis/figures/conversion_magnitude.png
-/tmp/channel_analysis/figures/conversion_singular_values.png
+```bash
+.venv/bin/python gui/npy_to_rfsim_bin.py --verify /tmp/srs_channel.bin
 ```
 
 ## Comparison CLI

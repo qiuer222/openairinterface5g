@@ -35,6 +35,7 @@ extern "C" {
 #include <common/utils/load_module_shlib.h>
 #include <openair1/SIMULATION/TOOLS/sim.h>
 #include "rfsimulator.h"
+#include "fd_channel.h"
 extern int get_currentchannels_type(const char *buf,
                                     int debug,
                                     webdatadef_t *tdata,
@@ -199,6 +200,8 @@ typedef struct {
   int wait_timeout;
   double prop_delay_ms;
   rfsim_beam_ctrl_t *beam_ctrl;
+  fd_channel_t *fd_channel;
+  bool fd_channel_disabled;
 } rfsimulator_state_t;
 
 /**
@@ -1276,6 +1279,108 @@ static bool flushInput(rfsimulator_state_t *t, int timeout, bool first_time)
   return nfds > 0;
 }
 
+static bool fd_slot_layout(const fd_channel_info_t *info, int nsamps, int *first_cp)
+{
+  const int fft = info->fft_size;
+  const int cp = info->cp_length;
+  const int regular_slot = info->symbols_per_slot * (fft + cp);
+  const int long_first_slot =
+      info->cp_length0 + fft + (info->symbols_per_slot - 1) * (fft + cp);
+
+  if (nsamps == long_first_slot) {
+    *first_cp = info->cp_length0;
+    return true;
+  }
+  if (nsamps == regular_slot) {
+    *first_cp = cp;
+    return true;
+  }
+  return false;
+}
+
+static bool apply_fd_channel(rfsimulator_state_t *t,
+                             buffer_t *ptr,
+                             c16_t **input,
+                             cf_t **output,
+                             int nsamps,
+                             int nbAnt)
+{
+  if (!t->fd_channel || t->fd_channel_disabled)
+    return false;
+
+  const fd_channel_info_t *info = fd_channel_info(t->fd_channel);
+  if (!info || ptr->nbAnt != (uint)info->num_tx || nbAnt != info->num_rx) {
+    t->fd_channel_disabled = true;
+    LOG_W(HW,
+          "[rfsim] Disabling fd channel replay: configured %dx%d, file %dx%d\n",
+          nbAnt,
+          ptr->nbAnt,
+          info ? info->num_rx : 0,
+          info ? info->num_tx : 0);
+    return false;
+  }
+
+  int first_cp = 0;
+  if (!fd_slot_layout(info, nsamps, &first_cp)) {
+    t->fd_channel_disabled = true;
+    LOG_W(HW,
+          "[rfsim] Disabling fd channel replay: unsupported read size %d for "
+          "%d symbols, fft=%d, cp=%d, cp0=%d\n",
+          nsamps,
+          info->symbols_per_slot,
+          info->fft_size,
+          info->cp_length,
+          info->cp_length0);
+    return false;
+  }
+
+  std::vector<std::vector<c16_t>> tx_symbols(
+      info->num_tx, std::vector<c16_t>(info->fft_size));
+  std::vector<std::vector<cf_t>> rx_symbols(
+      info->num_rx, std::vector<cf_t>(info->fft_size));
+  std::vector<c16_t *> tx_ptrs(info->num_tx);
+  std::vector<cf_t *> rx_ptrs(info->num_rx);
+  for (int tx = 0; tx < info->num_tx; tx++)
+    tx_ptrs[tx] = tx_symbols[tx].data();
+  for (int rx = 0; rx < info->num_rx; rx++)
+    rx_ptrs[rx] = rx_symbols[rx].data();
+
+  int sample_offset = 0;
+  for (int symbol = 0; symbol < info->symbols_per_slot; symbol++) {
+    const int cp = symbol == 0 ? first_cp : info->cp_length;
+    if (sample_offset + cp + info->fft_size > nsamps)
+      return false;
+
+    for (int tx = 0; tx < info->num_tx; tx++)
+      memcpy(tx_ptrs[tx],
+             input[tx] + sample_offset + cp,
+             info->fft_size * sizeof(c16_t));
+
+    if (fd_apply_symbol(t->fd_channel, tx_ptrs.data(), rx_ptrs.data()) != 0) {
+      t->fd_channel_disabled = true;
+      LOG_W(HW, "[rfsim] Disabling fd channel replay: symbol processing failed\n");
+      return false;
+    }
+
+    for (int rx = 0; rx < info->num_rx; rx++) {
+      memcpy(output[rx] + sample_offset,
+             rx_ptrs[rx] + info->fft_size - cp,
+             cp * sizeof(cf_t));
+      memcpy(output[rx] + sample_offset + cp,
+             rx_ptrs[rx],
+             info->fft_size * sizeof(cf_t));
+    }
+    sample_offset += cp + info->fft_size;
+  }
+
+  if (sample_offset != nsamps) {
+    t->fd_channel_disabled = true;
+    LOG_W(HW, "[rfsim] Disabling fd channel replay: slot size mismatch\n");
+    return false;
+  }
+  return true;
+}
+
 static void rfsimulator_read_internal(rfsimulator_state_t *t,
                                       c16_t **samples,
                                       openair0_timestamp_t timestamp,
@@ -1293,14 +1398,42 @@ static void rfsimulator_read_internal(rfsimulator_state_t *t,
 
     if (ptr->conn_sock != -1 && !ptr->received_packets.empty()) {
       AssertFatal(ptr->nbAnt != 0, "Number of antennas not set\n");
-      bool reGenerateChannel = false;
+      bool fd_applied = false;
 
-      // fixme: when do we regenerate
-      //  it seems legacy behavior is: never in UL, each frame in DL
-      if (reGenerateChannel)
-        random_channel(ptr->channel_model, 0);
+      if (t->fd_channel && !t->fd_channel_disabled) {
+        std::vector<std::vector<c16_t>> fd_input(
+            ptr->nbAnt, std::vector<c16_t>(nsamps, {0, 0}));
+        std::vector<std::vector<cf_t>> fd_output(
+            nbAnt, std::vector<cf_t>(nsamps, {0.0f, 0.0f}));
+        std::vector<c16_t *> input_ptrs(ptr->nbAnt);
+        std::vector<cf_t *> output_ptrs(nbAnt);
+        for (uint tx = 0; tx < ptr->nbAnt; tx++)
+          input_ptrs[tx] = fd_input[tx].data();
+        for (int rx = 0; rx < nbAnt; rx++)
+          output_ptrs[rx] = fd_output[rx].data();
 
-      if (ptr->channel_model != NULL) { // apply a channel model
+        combine_received_beams(t,
+                               ptr->received_packets,
+                               timestamp - t->chan_offset,
+                               ptr->nbAnt,
+                               nsamps,
+                               rx_beam_id,
+                               input_ptrs.data());
+
+        fd_applied = apply_fd_channel(
+            t, ptr, input_ptrs.data(), output_ptrs.data(), nsamps, nbAnt);
+        if (fd_applied) {
+          if (!channel_modelling) {
+            memset(temp_array, 0, sizeof(temp_array));
+            channel_modelling = true;
+          }
+          for (int rx = 0; rx < nbAnt; rx++)
+            for (int i = 0; i < nsamps; i++)
+              temp_array[rx][i] = fd_output[rx][i];
+        }
+      }
+
+      if (!fd_applied && ptr->channel_model != NULL) { // apply a channel model
         if (!channel_modelling) {
           memset(temp_array, 0, sizeof(temp_array));
           channel_modelling = true;
@@ -1322,9 +1455,9 @@ static void rfsimulator_read_internal(rfsimulator_state_t *t,
                                input);
 
         for (int aarx = 0; aarx < nbAnt; aarx++) {
-          rxAddInput_srsfile(input, temp_array[aarx], aarx, ptr->channel_model, nsamps);
+          rxAddInput(input, temp_array[aarx], aarx, ptr->channel_model, nsamps);
         }
-      } else {
+      } else if (!fd_applied) {
         if (is_first_beam && is_first_peer && (ptr->nbAnt == 1 && nbAnt == 1)) {
           // optimization: The buffer is uninitialized so samples can be written directly in the buffer
           combine_received_beams(t, ptr->received_packets, timestamp - t->chan_offset, 1, nsamps, rx_beam_id, samples);
@@ -1552,6 +1685,7 @@ static void rfsimulator_end(openair0_device_t *device)
   }
   clear_beam_queue(&s->beam_ctrl->tx, INT64_MAX);
   clear_beam_queue(&s->beam_ctrl->rx, INT64_MAX);
+  fd_channel_free(s->fd_channel);
   delete s->beam_ctrl;
   close(s->epollfd);
   free(s);
@@ -1602,6 +1736,29 @@ extern "C" __attribute__((__visibility__("default"))) int device_init(openair0_d
   rfsimulator->tx_bw = openair0_cfg->tx_bw;
   rfsimulator->beam_ctrl = new rfsim_beam_ctrl_t;
   rfsimulator_readconfig(rfsimulator);
+  const char *channel_file = getenv("CHANNEL_FILE");
+  if (channel_file && channel_file[0] != '\0') {
+    rfsimulator->fd_channel =
+        fd_channel_load(channel_file,
+                        rfsimulator->rx_num_channels,
+                        rfsimulator->tx_num_channels);
+    AssertFatal(rfsimulator->fd_channel,
+                "failed to load CHANNEL_FILE %s for %dx%d RFSim replay\n",
+                channel_file,
+                rfsimulator->rx_num_channels,
+                rfsimulator->tx_num_channels);
+    const fd_channel_info_t *info = fd_channel_info(rfsimulator->fd_channel);
+    LOG_I(HW,
+          "[rfsim] Loaded fd channel file: %s (1 slot, %dx%d, fft=%d, "
+          "symbols=%d, cp=%d, cp0=%d)\n",
+          channel_file,
+          info->num_rx,
+          info->num_tx,
+          info->fft_size,
+          info->symbols_per_slot,
+          info->cp_length,
+          info->cp_length0);
+  }
   if (rfsimulator->prop_delay_ms > 0.0)
     rfsimulator->chan_offset = ceil(rfsimulator->sample_rate * rfsimulator->prop_delay_ms / 1000);
   if (rfsimulator->chan_offset != 0) {
