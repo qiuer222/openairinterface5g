@@ -94,6 +94,42 @@ class AnalyzeChannelTests(unittest.TestCase):
             places=8,
         )
 
+    def test_frequency_axis_uses_oai_offsets_and_optional_center(self):
+        h = np.zeros((1, 1, 32), dtype=np.complex128)
+        h[0, 0, 2:6] = 1.0
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csi_path = os.path.join(tmpdir, "channel_frequency.npy")
+            srs_path = os.path.join(tmpdir, "srs_frequency.npy")
+            np.save(csi_path, h)
+            np.save(srs_path, h)
+            csi_metrics, csi_plot = analyze_channel(
+                csi_path,
+                kind="csi",
+                n_rb=1,
+                scs_hz=30000.0,
+            )
+            srs_metrics, srs_plot = analyze_channel(
+                srs_path,
+                kind="srs",
+                n_rb=1,
+                scs_hz=30000.0,
+                center_frequency_hz=3.6e9,
+            )
+
+        np.testing.assert_allclose(
+            csi_plot["frequencies_hz"],
+            np.array([-4.0, -3.0, -2.0, -1.0]) * 30000.0,
+        )
+        self.assertIsNone(csi_metrics["assumptions"]["center_frequency_hz"])
+        np.testing.assert_allclose(
+            srs_plot["frequencies_hz"],
+            np.array([-14.0, -13.0, -12.0, -11.0]) * 30000.0
+            + 3.6e9,
+        )
+        self.assertEqual(
+            srs_metrics["assumptions"]["center_frequency_hz"], 3.6e9
+        )
+
     def test_two_tap_channel_recovers_sparse_delays(self):
         fft_size = 32
         k = np.arange(fft_size)
@@ -143,6 +179,8 @@ class AnalyzeChannelTests(unittest.TestCase):
                         "1",
                         "--subcarrier-offset",
                         "0",
+                        "--center-frequency-hz",
+                        "3600000000",
                         "--output-dir",
                         output_dir,
                     ]
@@ -154,6 +192,9 @@ class AnalyzeChannelTests(unittest.TestCase):
             ) as fp:
                 data = json.load(fp)
             self.assertEqual(data["array"]["active_subcarriers"], 32)
+            self.assertEqual(
+                data["assumptions"]["center_frequency_hz"], 3.6e9
+            )
             self.assertTrue(
                 os.path.isfile(
                     os.path.join(output_dir, "channel_analysis.txt")

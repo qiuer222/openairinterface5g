@@ -91,6 +91,24 @@ def active_subcarriers(h: np.ndarray) -> np.ndarray:
     return np.flatnonzero(finite & (energy > EPS))
 
 
+def _subcarrier_frequencies_hz(
+    subcarrier_indices: np.ndarray,
+    fft_size: int,
+    subcarrier_offset: int,
+    scs_hz: float,
+    center_frequency_hz: Optional[float],
+) -> np.ndarray:
+    """Map saved OAI subcarrier indices to signed subcarrier frequencies."""
+    indices = np.asarray(subcarrier_indices, dtype=np.int64)
+    physical_bins = (indices + int(subcarrier_offset)) % int(fft_size)
+    signed_bins = physical_bins.astype(np.float64)
+    signed_bins[signed_bins >= fft_size / 2.0] -= float(fft_size)
+    frequencies_hz = signed_bins * float(scs_hz)
+    if center_frequency_hz is not None:
+        frequencies_hz += float(center_frequency_hz)
+    return frequencies_hz
+
+
 def _subcarrier_energy_metrics(
     energy: np.ndarray, subcarrier_indices: np.ndarray
 ) -> Dict:
@@ -541,6 +559,7 @@ def analyze_channel(
     n_rb: int = 106,
     scs_hz: float = 30000.0,
     subcarrier_offset: Optional[int] = None,
+    center_frequency_hz: Optional[float] = None,
     noise_power: float = 1.0,
     snr_db: Optional[float] = None,
     tap_len: int = TAP_LEN_DEFAULT,
@@ -553,6 +572,8 @@ def analyze_channel(
         raise ValueError("n_rb must be positive")
     if scs_hz <= 0:
         raise ValueError("scs_hz must be positive")
+    if center_frequency_hz is not None and center_frequency_hz < 0:
+        raise ValueError("center_frequency_hz must be non-negative")
     if noise_power <= 0:
         raise ValueError("noise_power must be positive")
     if tap_len <= 0:
@@ -584,6 +605,13 @@ def analyze_channel(
             if resolved_kind == "srs"
             else fft_size - (n_rb * 12 // 2)
         )
+    frequencies_hz = _subcarrier_frequencies_hz(
+        active,
+        fft_size,
+        subcarrier_offset,
+        scs_hz,
+        center_frequency_hz,
+    )
 
     finite_count = int(np.count_nonzero(np.all(np.isfinite(h), axis=(0, 1))))
     invalid_count = int(h.shape[-1] - finite_count)
@@ -625,6 +653,7 @@ def analyze_channel(
             "n_rb": int(n_rb),
             "scs_hz": float(scs_hz),
             "subcarrier_offset": int(subcarrier_offset),
+            "center_frequency_hz": center_frequency_hz,
             "noise_power": float(noise_power),
             "snr_db": snr_db,
             "transpose": bool(transpose),
@@ -648,6 +677,8 @@ def analyze_channel(
     plot_data = {
         "h": h,
         "active": active,
+        "frequencies_hz": frequencies_hz,
+        "center_frequency_hz": center_frequency_hz,
         "subcarrier_energy": subcarrier_energy,
         "singular_values": sv,
         "condition": condition,
@@ -662,6 +693,12 @@ def _format_report(metrics: Dict) -> str:
     file_info = metrics["file"]
     assumption = metrics["assumptions"]
     array = metrics["array"]
+    center_frequency_hz = assumption["center_frequency_hz"]
+    center_frequency_text = (
+        "relative"
+        if center_frequency_hz is None
+        else f"{center_frequency_hz:.6g} Hz"
+    )
     lines.extend(
         [
             "=== File ===",
@@ -685,6 +722,7 @@ def _format_report(metrics: Dict) -> str:
                 f"assumptions: n_rb={assumption['n_rb']} "
                 f"scs={assumption['scs_hz']:.0f} Hz "
                 f"offset={assumption['subcarrier_offset']} "
+                f"center={center_frequency_text} "
                 f"noise_power={assumption['noise_power']} "
                 f"snr_db={assumption['snr_db']}"
             ),
@@ -813,8 +851,29 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     condition = plot_data["condition"]
     impulse = plot_data["impulse"]
     delays = plot_data["delays"]
+    frequencies_hz = plot_data["frequencies_hz"]
     subcarrier_energy = plot_data["subcarrier_energy"]
     outputs: List[str] = []
+    if plot_data["center_frequency_hz"] is None:
+        frequency_scale = 1e6
+        frequency_unit = "MHz"
+        frequency_label = "frequency relative to carrier center (MHz)"
+    else:
+        max_abs_frequency = float(np.max(np.abs(frequencies_hz)))
+        if max_abs_frequency >= 1e9:
+            frequency_scale = 1e9
+            frequency_unit = "GHz"
+        elif max_abs_frequency >= 1e6:
+            frequency_scale = 1e6
+            frequency_unit = "MHz"
+        elif max_abs_frequency >= 1e3:
+            frequency_scale = 1e3
+            frequency_unit = "kHz"
+        else:
+            frequency_scale = 1.0
+            frequency_unit = "Hz"
+        frequency_label = f"frequency ({frequency_unit})"
+    frequency_values = frequencies_hz / frequency_scale
 
     fig, axes = plt.subplots(
         h.shape[0],
@@ -824,9 +883,11 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     )
     for rx in range(h.shape[0]):
         for tx in range(h.shape[1]):
-            axes[rx, tx].plot(active, np.abs(h[rx, tx, active]))
+            axes[rx, tx].plot(
+                frequency_values, np.abs(h[rx, tx, active])
+            )
             axes[rx, tx].set_title(f"|H| rx{rx} tx{tx}")
-            axes[rx, tx].set_xlabel("subcarrier")
+            axes[rx, tx].set_xlabel(frequency_label)
     fig.tight_layout()
     path = os.path.join(output_dir, "channel_magnitude.png")
     fig.savefig(path, dpi=160)
@@ -835,7 +896,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
 
     fig, ax = plt.subplots(figsize=(10, 5))
     energy_db = 10.0 * np.log10(np.maximum(subcarrier_energy, EPS))
-    ax.plot(active, energy_db, color="#1f77b4", linewidth=1.5)
+    ax.plot(frequency_values, energy_db, color="#1f77b4", linewidth=1.5)
     ax.axhline(
         float(np.mean(energy_db)),
         color="#d62728",
@@ -844,7 +905,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
         label="mean",
     )
     ax.set_title("Total channel energy across rx/tx paths")
-    ax.set_xlabel("subcarrier")
+    ax.set_xlabel(frequency_label)
     ax.set_ylabel("channel energy (dB)")
     ax.grid(alpha=0.25)
     ax.legend()
@@ -862,9 +923,12 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     )
     for rx in range(h.shape[0]):
         for tx in range(h.shape[1]):
-            axes[rx, tx].plot(active, np.unwrap(np.angle(h[rx, tx, active])))
+            axes[rx, tx].plot(
+                frequency_values,
+                np.unwrap(np.angle(h[rx, tx, active])),
+            )
             axes[rx, tx].set_title(f"phase rx{rx} tx{tx}")
-            axes[rx, tx].set_xlabel("subcarrier")
+            axes[rx, tx].set_xlabel(frequency_label)
     fig.tight_layout()
     path = os.path.join(output_dir, "channel_phase.png")
     fig.savefig(path, dpi=160)
@@ -873,8 +937,8 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
 
     fig, ax = plt.subplots(figsize=(10, 5))
     for idx in range(sv.shape[1]):
-        ax.plot(active, sv[:, idx], label=f"SV{idx + 1}")
-    ax.set_xlabel("subcarrier")
+        ax.plot(frequency_values, sv[:, idx], label=f"SV{idx + 1}")
+    ax.set_xlabel(frequency_label)
     ax.set_ylabel("singular value")
     ax.legend()
     fig.tight_layout()
@@ -884,9 +948,9 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     outputs.append(path)
 
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(active, condition)
+    ax.plot(frequency_values, condition)
     ax.set_yscale("log")
-    ax.set_xlabel("subcarrier")
+    ax.set_xlabel(frequency_label)
     ax.set_ylabel("condition number")
     fig.tight_layout()
     path = os.path.join(output_dir, "channel_condition_number.png")
@@ -972,6 +1036,15 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=None,
         help="physical FFT offset; defaults to SRS FFT/2 or CSI first carrier",
     )
+    parser.add_argument(
+        "--center-frequency-hz",
+        type=float,
+        default=None,
+        help=(
+            "carrier center frequency in Hz; when omitted, plot frequencies "
+            "are relative to the carrier center"
+        ),
+    )
     parser.add_argument("--noise-power", type=float, default=1.0)
     parser.add_argument("--snr-db", type=float, default=None)
     parser.add_argument("--tap-len", type=int, default=TAP_LEN_DEFAULT)
@@ -991,6 +1064,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             n_rb=args.n_rb,
             scs_hz=args.scs,
             subcarrier_offset=args.subcarrier_offset,
+            center_frequency_hz=args.center_frequency_hz,
             noise_power=args.noise_power,
             snr_db=args.snr_db,
             tap_len=args.tap_len,

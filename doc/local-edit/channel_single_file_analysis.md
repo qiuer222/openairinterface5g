@@ -26,8 +26,14 @@ Analyze a CSI-RS file:
 ```bash
 .venv/bin/python gui/analyze_channel.py \
   gui/record/gui_log_20260806_222820/channel_20260806_222849_049069.npy \
+  --center-frequency-hz 3600000000 \
   --output-dir /tmp/csi_analysis_test
 ```
+
+`--center-frequency-hz` is optional. When supplied, all frequency-domain plots
+use absolute RF frequencies. When omitted, they use frequencies relative to
+the carrier center. Use the OAI `dl_CarrierFreq` value for CSI-RS and
+`ul_CarrierFreq` for SRS.
 
 Run the unit tests:
 
@@ -60,6 +66,7 @@ Without `--output-dir`, the script only prints the report. With
 <output-dir>/figures/channel_phase.png
 <output-dir>/figures/channel_singular_values.png
 <output-dir>/figures/channel_condition_number.png
+<output-dir>/figures/channel_subcarrier_energy.png
 <output-dir>/figures/channel_impulse_response.png
 <output-dir>/figures/channel_pdp.png
 <output-dir>/figures/channel_capacity.png
@@ -82,7 +89,7 @@ written as JSON `null`.
 ### `channel_magnitude.png`
 
 One time-domain-independent frequency-response panel per RX/TX path. The
-x-axis is the active subcarrier index and the y-axis is `abs(H)`.
+x-axis is the active subcarrier frequency and the y-axis is `abs(H)`.
 
 Use it to identify:
 
@@ -131,6 +138,68 @@ condition(k) = sigma_max(k) / max(sigma_min(k), epsilon)
 - Near 1: balanced singular values and well-conditioned spatial layers.
 - Large values: one layer is much weaker than another.
 - Very large values: numerical rank loss and difficult MIMO detection.
+
+### `channel_subcarrier_energy.png`
+
+Total channel energy over all RX/TX paths for each active subcarrier:
+
+```text
+E(k) = sum_rx sum_tx abs(H[rx, tx, k])^2
+```
+
+The x-axis is the actual subcarrier frequency and the y-axis is energy in dB.
+The dashed horizontal line is the mean energy. Use this figure to identify
+frequency-selective energy variations, notch regions, and uneven channel
+quality across the configured bandwidth.
+
+### Frequency-axis convention
+
+The `.npy` snapshot stores samples in OAI estimator order, not absolute RF
+frequencies. The analysis maps each saved subcarrier index `k_saved` to an FFT
+bin using:
+
+```text
+k_fft = (k_saved + subcarrier_offset) mod fft_size
+```
+
+The signed FFT bin is then converted to a frequency:
+
+```text
+signed_bin(k) = k_fft - fft_size, if k_fft >= fft_size/2
+signed_bin(k) = k_fft,              otherwise
+f_relative(k) = signed_bin(k) * scs
+f_absolute(k) = center_frequency_hz + f_relative(k)
+```
+
+If `--center-frequency-hz` is omitted, `center_frequency_hz` is zero and the
+figures show `f_relative` in MHz. This is the carrier-center-relative
+frequency, not the absolute RF frequency.
+
+The default CSI-RS offset follows OAI:
+
+```text
+subcarrier_offset = fft_size - N_RB * 12 / 2
+f_relative(k) = (k_saved - N_RB * 12 / 2) * scs
+```
+
+This comes from `fp->first_carrier_offset` in
+`openair1/PHY/INIT/nr_parms.c` and the CSI-RS channel-estimation layout in
+`openair1/PHY/NR_UE_TRANSPORT/csi_rx.c`. CSI-RS estimates are saved starting
+at the first occupied carrier subcarrier, so `k_saved = 0` is the lowest
+subcarrier in the configured carrier grid.
+
+The default SRS offset is:
+
+```text
+subcarrier_offset = fft_size / 2
+f_relative(k) = (k_saved - fft_size / 2) * scs
+```
+
+This follows the SRS interpolation layout in
+`openair1/PHY/NR_ESTIMATION/nr_ul_channel_estimation.c`, where the estimator
+uses `first_carrier_offset - fft_size/2` before copying the result into the
+saved array. The matching half-FFT shift is also used by
+`gui/npy_to_rfsim_bin.py` for SRS replay.
 
 ### `channel_impulse_response.png`
 
@@ -196,14 +265,16 @@ This helps compare:
 |---|---|
 | `n_rb` | Assumed resource-block bandwidth |
 | `scs_hz` | Assumed subcarrier spacing in Hz |
-| `subcarrier_offset` | Physical FFT-bin offset used for IDFT and tap fitting |
+| `subcarrier_offset` | Physical FFT-bin offset used for frequency-axis mapping, IDFT, and tap fitting |
+| `center_frequency_hz` | Optional absolute carrier center frequency used by frequency-domain plots |
 | `noise_power` | Noise power used by capacity calculations |
 | `snr_db` | Optional target SNR used to normalize the channel before capacity calculation |
 | `transpose` | Whether RX and TX axes were swapped before analysis |
 
-`n_rb`, `scs_hz`, and `subcarrier_offset` are not stored in `.npy`. Defaults
-are `106` PRB, `30000` Hz, SRS offset `fft_size/2`, and CSI-RS offset
-`fft_size - n_rb*12/2`.
+`n_rb`, `scs_hz`, `subcarrier_offset`, and `center_frequency_hz` are not
+stored in `.npy`. Defaults are `106` PRB, `30000` Hz, SRS offset
+`fft_size/2`, CSI-RS offset `fft_size - n_rb*12/2`, and no absolute center
+frequency.
 
 ### Frequency-domain path metrics
 
