@@ -1,5 +1,8 @@
 # OAI NR gNB Performance Monitor (GUI)
 
+For the authoritative definition of every live GUI field and CSV column, see
+[UE and gNB GUI/CSV Variable Reference](../gui_variable_reference.md).
+
 ## 1. Overview
 
 The gNB monitor is the counterpart of `gui/oai_ue_monitor.py` for the UE.
@@ -125,10 +128,14 @@ DL CSV columns and their source variables:
 | `dl_app_se` | computed in GUI | DL iperf throughput / active DL BWP bandwidth | application-level DL spectral efficiency in bit/s/Hz |
 
 `ul_tbs` is also stored as bits (`harq->sched_pusch.tb_size * 8`), and both
-DL/UL `rv` fields now use `nr_get_rv(harq->round % 4)` instead of a hard-coded
-zero. The gNB UL CSV also records `ul_tpmi` from
-`harq->sched_pusch.tpmi`. TPMI 0 is a valid value; unavailable TPMI is stored
-as `0xff` in SHM and written as an empty CSV field.
+DL/UL `rv` fields use `nr_get_rv(harq->round % 4)` instead of a hard-coded
+zero. The gNB UL CSV records `ul_rv`, `ul_ndi`, `ul_target_code_rate`,
+`ul_rssi_dbfs`, `ul_cqi`, `ul_tpmi`, and `ul_tpmi_valid`.
+`ul_cqi`, `ul_rssi_dbfs`, and
+`ul_timing_advance` are copied from the PUSCH decode callback into the HARQ
+snapshot. TPMI 0 is a valid value when codebook-based UL transmission has
+valid SRS RI/TPMI feedback. `ul_tpmi_valid` distinguishes that case from the
+fallback TPMI 0 used before any valid SRS feedback.
 
 DL CQI, RI, PMI, BLER, counters, and SINR are sampled when the PDSCH scheduler
 snapshot is written. `dl_sinr` never falls back to PUCCH power-control SNR.
@@ -137,6 +144,16 @@ report arrives; without one, CSV is empty and the GUI shows `N/A`. Zero is a
 valid CQI/PMI value and is not replaced by a previous non-zero sample. A CSI
 report received after the last PDSCH becomes visible on the next PDSCH
 snapshot.
+
+`dl_cqi` and `ul_cqi` are different quantities and should not be compared
+directly:
+
+- `dl_cqi` is the UE-reported wideband CSI CQI index in the range 0-15.
+- `ul_cqi` is the gNB PUSCH SNR quantized to 0-255 using
+  `clamp((640 + SNR_x10) / 5, 0, 255)`.
+
+For example, `ul_cqi = 168` corresponds to approximately 20 dB PUSCH SNR,
+while `dl_cqi = 15` is the maximum 4-bit wideband CSI CQI reported by the UE.
 
 ### 3.2 Spectral efficiency and iperf direction
 
@@ -267,9 +284,14 @@ UL fields are written by `handle_nr_ul_harq()` in
 | `ul_scs_khz` | `subcarrier_spacing_khz` | `15 << UE->current_UL_BWP.scs` | active UL subcarrier spacing in kHz |
 | `ul_sched_se` | computed in GUI | `ul_tbs / (ul_nprb * 12 * ul_nsymb)` | scheduled UL SE in bit/s/Hz |
 | `ul_app_se` | computed in GUI | `ul_throughput_mbps * 1e6 / (ul_n_rb_ul * 12 * ul_scs_khz * 1000)` | application-level UL SE in bit/s/Hz |
-| `ul_timing_advance` | `timing_advance` | reserved; not populated by current UL HARQ writer | currently 0 |
-| `ul_cqi` | `ul_cqi` | reserved; not populated by current UL HARQ writer | currently 0 |
-| `ul_tpmi` | `tpmi` | `harq->sched_pusch.tpmi` | UL TPMI index; empty when `tpmi` is unavailable |
+| `ul_rv` | `rv` | `nr_get_rv(harq->round % 4)` | redundancy version |
+| `ul_ndi` | `new_data_indicator` | `harq->ndi` | new-data indicator |
+| `ul_target_code_rate` | `target_code_rate` | `harq->sched_pusch.R` | code rate numerator, denominator 1024 |
+| `ul_timing_advance` | `timing_advance` | `timing_advance` from `_nr_rx_sdu()` | timing advance; empty when unavailable |
+| `ul_cqi` | `ul_cqi` | `ul_cqi` from `_nr_rx_sdu()` | quantized UL CQI; empty for `0xff` |
+| `ul_tpmi` | `tpmi` | `harq->sched_pusch.tpmi` | actual UL TPMI index; `0xff` when unavailable |
+| `ul_tpmi_valid` | `tpmi_valid` | `harq->sched_pusch.tpmi_valid` | 1 when TPMI comes from valid SRS feedback, otherwise 0 |
+| `ul_rssi_dbfs` | `rssi` | `rssi` from `_nr_rx_sdu()` | RSSI in dBFS after `(rssi_fapi - 1280) / 10`; empty when unavailable |
 
 ### 4.4 SRS columns
 

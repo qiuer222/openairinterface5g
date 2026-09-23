@@ -672,7 +672,14 @@ static void abort_nr_ul_harq(NR_UE_info_t *UE, int8_t harq_pid)
     sched_ctrl->sched_ul_bytes = 0;
 }
 
-static void handle_nr_ul_harq(gNB_MAC_INST *nrmac, NR_UE_info_t *UE, rnti_t rnti, int crc_harq_id, bool crc_status)
+static void handle_nr_ul_harq(gNB_MAC_INST *nrmac,
+                              NR_UE_info_t *UE,
+                              rnti_t rnti,
+                              int crc_harq_id,
+                              bool crc_status,
+                              uint8_t ul_cqi,
+                              uint16_t rssi,
+                              uint16_t timing_advance)
 {
   if (nrmac->radio_config.disable_harq) {
     LOG_D(NR_MAC, "skipping UL feedback handling as HARQ is disabled\n");
@@ -717,9 +724,15 @@ static void handle_nr_ul_harq(gNB_MAC_INST *nrmac, NR_UE_info_t *UE, rnti_t rnti
   m.rv = nr_get_rv(harq->round % 4);
   m.new_data_indicator = harq->ndi;
   m.target_code_rate = harq->sched_pusch.R;
+  m.timing_advance = timing_advance;
+  m.ul_cqi = ul_cqi;
+  m.rssi = rssi == GNB_RSSI_RAW_INVALID
+               ? GNB_RSSI_INVALID
+               : (int16_t)rssi;
   m.tpmi = harq->sched_pusch.tpmi >= 0
                ? (uint8_t)harq->sched_pusch.tpmi
                : GNB_TPMI_INVALID;
+  m.tpmi_valid = harq->sched_pusch.tpmi_valid;
   m.n_rb_ul = harq->sched_pusch.bwp_info.bwpSize;
   DevAssert(UE->current_UL_BWP.scs >= 0 && UE->current_UL_BWP.scs <= 4);
   m.subcarrier_spacing_khz = 15u << UE->current_UL_BWP.scs;
@@ -1046,7 +1059,14 @@ static void _nr_rx_sdu(const module_id_t gnb_mod_idP,
         nr_mac_trigger_ul_failure(&UE->UE_sched_ctrl, UE->current_UL_BWP.scs);
       }
     }
-    handle_nr_ul_harq(gNB_mac, UE, current_rnti, harq_pid, sduP == NULL);
+    handle_nr_ul_harq(gNB_mac,
+                      UE,
+                      current_rnti,
+                      harq_pid,
+                      sduP == NULL,
+                      ul_cqi,
+                      rssi,
+                      timing_advance);
   } else {
     nr_rx_ra_sdu(gnb_mod_idP, CC_idP, frameP, slotP, current_rnti, sduP, sdu_lenP, harq_pid, timing_advance, ul_cqi, rssi);
   }
@@ -1641,6 +1661,8 @@ void handle_nr_srs_measurements(const module_id_t module_id,
                                                              nr_srs_channel_iq_matrix.num_ue_srs_ports,
                                                              nr_srs_channel_iq_matrix.num_prgs,
                                                              sched_ctrl->srs_feedback.ul_ri);
+      sched_ctrl->srs_feedback.valid =
+          sched_ctrl->srs_feedback.ul_ri <= 1;
       stop_meas(&nr_mac->nr_srs_tpmi_computation_timer);
 
       sprintf(stats->srs_stats, "UL-RI %d, TPMI %d", sched_ctrl->srs_feedback.ul_ri + 1, sched_ctrl->srs_feedback.tpmi);

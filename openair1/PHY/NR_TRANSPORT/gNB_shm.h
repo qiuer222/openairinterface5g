@@ -19,6 +19,10 @@
 #define GNB_UL_MEAS_SHM_NAME "/gnb_meas_ul"
 #define GNB_SRS_SHM_NAME     "/srs_channel"
 #define GNB_TPMI_INVALID      UINT8_C(0xFF)
+#define GNB_UL_CQI_INVALID    UINT8_C(0xFF)
+#define GNB_RSSI_INVALID      INT16_MIN
+#define GNB_RSSI_RAW_INVALID  UINT16_C(0xFFFF)
+#define GNB_TIMING_ADVANCE_INVALID UINT16_C(0xFFFF)
 #define GNB_SINR_INVALID      INT16_MIN
 
 /* ---------- SRS sizing ---------- */
@@ -77,6 +81,7 @@ typedef struct __attribute__((packed)) {
   uint16_t  timing_advance;
   uint8_t   ul_cqi;
   uint8_t   tpmi;
+  uint8_t   tpmi_valid;
   int16_t   rssi;
   uint16_t  n_rb_ul;
   uint32_t  subcarrier_spacing_khz;

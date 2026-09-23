@@ -12,6 +12,9 @@ from typing import Dict, Optional
 GNB_DL_MEAS_SHM = "/dev/shm/gnb_meas_dl"
 GNB_UL_MEAS_SHM = "/dev/shm/gnb_meas_ul"
 GNB_TPMI_INVALID = 0xFF
+GNB_UL_CQI_INVALID = 0xFF
+GNB_RSSI_INVALID = -32768
+GNB_TIMING_ADVANCE_INVALID = 0xFFFF
 GNB_SINR_INVALID = -32768
 
 
@@ -71,6 +74,7 @@ class GnbUlShm(ctypes.Structure):
         ("timing_advance",     ctypes.c_uint16),
         ("ul_cqi",             ctypes.c_uint8),
         ("tpmi",               ctypes.c_uint8),
+        ("tpmi_valid",         ctypes.c_uint8),
         ("rssi",               ctypes.c_int16),
         ("n_rb_ul",            ctypes.c_uint16),
         ("subcarrier_spacing_khz", ctypes.c_uint32),
@@ -187,6 +191,7 @@ class GnbUlReader:
         received = int(m.ulsch_received)
         errors = int(m.ulsch_errors)
         sinr_db_x10 = int(m.sinr_db_x10)
+        rssi_fapi = None if m.rssi == GNB_RSSI_INVALID else int(m.rssi)
         return {
             "frame": m.frame,
             "slot": m.slot,
@@ -202,10 +207,20 @@ class GnbUlReader:
             "rv": m.rv,
             "ndi": m.new_data_indicator,
             "target_code_rate": m.target_code_rate,
-            "timing_advance": m.timing_advance,
-            "ul_cqi": m.ul_cqi,
+            "timing_advance": (
+                None
+                if m.timing_advance == GNB_TIMING_ADVANCE_INVALID
+                else m.timing_advance
+            ),
+            "ul_cqi": (
+                None if m.ul_cqi == GNB_UL_CQI_INVALID else m.ul_cqi
+            ),
             "tpmi": None if m.tpmi == GNB_TPMI_INVALID else m.tpmi,
-            "rssi": m.rssi,
+            "tpmi_valid": bool(m.tpmi_valid),
+            "rssi": (
+                None if rssi_fapi is None else (rssi_fapi - 1280) / 10.0
+            ),
+            "rssi_fapi": rssi_fapi,
             "n_rb_ul": m.n_rb_ul,
             "scs_khz": m.subcarrier_spacing_khz,
             "received": received,

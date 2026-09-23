@@ -27,7 +27,16 @@ void nr_ul_ri_tpmi_select_default(gNB_MAC_INST *mac, nr_ul_candidate_t *cands, i
     NR_UE_sched_ctrl_t *sched_ctrl = &cand->UE->UE_sched_ctrl;
     NR_UE_UL_BWP_t *current_BWP = &cand->UE->current_UL_BWP;
     cand->sched_pusch.nrOfLayers = (current_BWP->dci_format == NR_UL_DCI_FORMAT_0_0) ? 1 : sched_ctrl->srs_feedback.ul_ri + 1;
-    cand->sched_pusch.tpmi = sched_ctrl->srs_feedback.tpmi;
+    const bool tpmi_applicable =
+        current_BWP->dci_format == NR_UL_DCI_FORMAT_0_1
+        && current_BWP->pusch_Config
+        && current_BWP->pusch_Config->txConfig
+        && *current_BWP->pusch_Config->txConfig
+               == NR_PUSCH_Config__txConfig_codebook;
+    cand->sched_pusch.tpmi_valid =
+        tpmi_applicable && sched_ctrl->srs_feedback.valid;
+    cand->sched_pusch.tpmi =
+        cand->sched_pusch.tpmi_valid ? sched_ctrl->srs_feedback.tpmi : 0;
   }
 }
 

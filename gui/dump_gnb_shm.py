@@ -12,9 +12,12 @@ if __package__ in (None, ""):
 
 from gui.gnb_meas_reader import (
     GNB_DL_MEAS_SHM,
+    GNB_RSSI_INVALID,
     GNB_SINR_INVALID,
+    GNB_TIMING_ADVANCE_INVALID,
     GNB_TPMI_INVALID,
     GNB_UL_MEAS_SHM,
+    GNB_UL_CQI_INVALID,
     GnbDlShm,
     GnbUlShm,
 )
@@ -53,13 +56,31 @@ def main() -> None:
     ul = _read_struct(GNB_UL_MEAS_SHM, GnbUlShm, ctypes.sizeof(GnbUlShm))
     if ul is not None:
         tpmi = "N/A" if ul.tpmi == GNB_TPMI_INVALID else str(ul.tpmi)
+        ul_cqi = (
+            "N/A" if ul.ul_cqi == GNB_UL_CQI_INVALID else str(ul.ul_cqi)
+        )
+        rssi = "N/A" if ul.rssi == GNB_RSSI_INVALID else str(ul.rssi)
+        rssi_dbfs = (
+            "N/A"
+            if ul.rssi == GNB_RSSI_INVALID
+            else f"{(ul.rssi - 1280) / 10.0:.1f}"
+        )
+        timing_advance = (
+            "N/A"
+            if ul.timing_advance == GNB_TIMING_ADVANCE_INVALID
+            else str(ul.timing_advance)
+        )
         print(
             f"seq={ul.seq} frame={ul.frame} slot={ul.slot} rnti=0x{ul.rnti:04x} "
             f"received={ul.ulsch_received} errors={ul.ulsch_errors} "
             f"bler_x1000={ul.bler_x1000} sinr_db_x10={ul.sinr_db_x10} "
             f"mcs={ul.mcs} qm={ul.qam_mod_order} nprb={ul.num_rbs} "
-            f"tbs_bits={ul.tbs} ta={ul.timing_advance} ul_cqi={ul.ul_cqi} "
-            f"tpmi={tpmi} n_rb_ul={ul.n_rb_ul} "
+            f"tbs_bits={ul.tbs} rv={ul.rv} ndi={ul.new_data_indicator} "
+            f"target_code_rate={ul.target_code_rate} ta={timing_advance} "
+            f"ul_cqi={ul_cqi} tpmi={tpmi} tpmi_valid={ul.tpmi_valid} "
+            f"rssi_fapi={rssi} "
+            f"rssi_dbfs={rssi_dbfs} "
+            f"n_rb_ul={ul.n_rb_ul} "
             f"scs_khz={ul.subcarrier_spacing_khz}"
         )
 

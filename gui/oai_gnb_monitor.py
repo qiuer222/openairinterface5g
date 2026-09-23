@@ -329,7 +329,8 @@ class GnbMainWindow(QMainWindow):
             f"Frame: {m.get('frame', 0)}  Slot: {m.get('slot', 0)}  "
             f"RNTI: {int(m.get('rnti', 0)):#06x}",
             f"BLER: {m.get('bler', 0):.2f} %",
-            f"SINR: {sinr_text} (UE SSB)  CQI: {m.get('cqi', 0)}  "
+            f"SINR: {sinr_text} (UE SSB)  "
+            f"WB CQI: {m.get('cqi', 0)}  "
             f"RI/Layers: {m.get('ri', 0)}",
             f"MCS: {m.get('mcs', 0)}  Qm: {m.get('qm', 0)}  NPRB: {m.get('nprb', 0)}",
             f"Layers: {m.get('layers', 0)}  Symbols: {m.get('nsymb', 0)}  "
@@ -345,7 +346,20 @@ class GnbMainWindow(QMainWindow):
 
     def _update_ul_text(self, m: Dict) -> None:
         tpmi = m.get("tpmi")
-        tpmi_text = "N/A" if tpmi is None else str(tpmi)
+        if tpmi is None:
+            tpmi_text = "N/A"
+        elif m.get("tpmi_valid", False):
+            tpmi_text = str(tpmi)
+        else:
+            tpmi_text = f"{tpmi} (default)"
+        ul_cqi = m.get("ul_cqi")
+        ul_cqi_text = "N/A" if ul_cqi is None else str(ul_cqi)
+        rssi = m.get("rssi")
+        rssi_text = "N/A" if rssi is None else f"{rssi:.1f} dBFS"
+        timing_advance = m.get("timing_advance")
+        timing_advance_text = (
+            "N/A" if timing_advance is None else str(timing_advance)
+        )
         bw = bandwidth_hz(
             int(m.get("n_rb_ul", 0)),
             int(m.get("scs_khz", 0)),
@@ -358,13 +372,13 @@ class GnbMainWindow(QMainWindow):
             f"Frame: {m.get('frame', 0)}  Slot: {m.get('slot', 0)}  "
             f"RNTI: {int(m.get('rnti', 0)):#06x}",
             f"BLER: {m.get('bler', 0):.2f} %",
-            f"SINR: {m.get('sinr', 0):.1f} dB  TA: {m.get('timing_advance', 0)}",
+            f"SINR: {m.get('sinr', 0):.1f} dB  TA: {timing_advance_text}",
             f"MCS: {m.get('mcs', 0)}  Qm: {m.get('qm', 0)}  NPRB: {m.get('nprb', 0)}",
             f"Layers: {m.get('layers', 0)}  Symbols: {m.get('nsymb', 0)}  "
             f"TBS (bits): {m.get('tbs', 0)}",
             f"RV: {m.get('rv', 0)}  NDI: {m.get('ndi', 0)}  "
-            f"UL CQI: {m.get('ul_cqi', 0)}  TPMI: {tpmi_text}  "
-            f"RSSI: {m.get('rssi', 0)}",
+            f"PUSCH CQI: {ul_cqi_text}  TPMI: {tpmi_text}  "
+            f"RSSI: {rssi_text}",
             f"SCS: {m.get('scs_khz', 0)} kHz  BWP BW: {bw / 1e6:.2f} MHz",
             f"Sched SE: {scheduled_se_text} bit/s/Hz  "
             f"App SE: {application_se_text} bit/s/Hz",
@@ -492,7 +506,8 @@ class GnbMainWindow(QMainWindow):
             "ul_frame", "ul_slot", "ul_rnti", "ul_bler", "ul_sinr",
             "ul_mcs", "ul_nprb", "ul_layers", "ul_qm", "ul_tbs",
             "ul_nsymb", "ul_n_rb_ul", "ul_scs_khz", "ul_sched_se", "ul_app_se",
-            "ul_timing_advance", "ul_cqi", "ul_tpmi",
+            "ul_timing_advance", "ul_cqi", "ul_tpmi", "ul_tpmi_valid",
+            "ul_rv", "ul_ndi", "ul_target_code_rate", "ul_rssi_dbfs",
             "dl_frame", "dl_slot", "dl_rnti", "dl_bler", "dl_sinr",
             "dl_mcs", "dl_nprb", "dl_layers", "dl_qm", "dl_tbs",
             "dl_cqi", "dl_ri", "dl_nsymb", "dl_rv", "dl_ndi",
@@ -527,8 +542,13 @@ class GnbMainWindow(QMainWindow):
             ul.get("nsymb", 0), ul.get("n_rb_ul", 0), ul.get("scs_khz", 0),
             "" if ul_sched_se is None else ul_sched_se,
             "" if ul_app_se is None else ul_app_se,
-            ul.get("timing_advance", 0), ul.get("ul_cqi", 0),
+            "" if ul.get("timing_advance") is None else ul.get("timing_advance"),
+            "" if ul.get("ul_cqi") is None else ul.get("ul_cqi"),
             "" if ul.get("tpmi") is None else ul.get("tpmi"),
+            1 if ul.get("tpmi_valid", False) else 0,
+            ul.get("rv", 0), ul.get("ndi", 0),
+            ul.get("target_code_rate", 0),
+            "" if ul.get("rssi") is None else ul.get("rssi"),
             dl.get("frame", 0), dl.get("slot", 0), dl.get("rnti", 0),
             dl.get("bler", 0), "" if dl.get("sinr") is None else dl.get("sinr"),
             dl.get("mcs", 0), dl.get("nprb", 0), dl.get("layers", 0),

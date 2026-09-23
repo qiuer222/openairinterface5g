@@ -508,6 +508,7 @@ typedef struct nr_srs_feedback {
   uint8_t sri;
   uint8_t ul_ri;
   uint8_t tpmi;
+  bool valid;
 } nr_srs_feedback_t;
 
 typedef struct NR_UE_DL_BWP {
@@ -606,4 +607,3 @@ typedef enum {
 } nr_ra_type_t;
 
 #endif /*__LAYER2_MAC_H__ */
-

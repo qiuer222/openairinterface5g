@@ -1,5 +1,8 @@
 # OAI UE Downlink Performance Monitor (GUI)
 
+For the authoritative definition of every live GUI field and CSV column, see
+[UE and gNB GUI/CSV Variable Reference](gui_variable_reference.md).
+
 ## 1. Overview
 
 The monitor consists of two parts:
@@ -477,7 +480,11 @@ The complete signal-energy, noise-energy, and SINR derivation is in
 - Read as `snr = hdr.snr_db_x10 / 10.0` (`gui/srs_reader.py:112`), displayed
   in the SRS status line as `SNR X.X dB`.
 
-## 9. gNB DL/UL CSV recording variables
+## 9. Cross-reference: gNB DL/UL CSV recording variables
+
+The complete, authoritative field definitions are in
+[UE and gNB GUI/CSV Variable Reference](gui_variable_reference.md). The
+following section preserves the detailed gNB source mapping.
 
 The gNB DL CSV row is written from `/dev/shm/gnb_meas_dl`. The scheduler
 snapshot is generated in `generate_dl_mac_pdu()`
@@ -520,11 +527,22 @@ The corrected DL mapping is:
 | `ul_scs_khz` | `subcarrier_spacing_khz` | `15 << UE->current_UL_BWP.scs` | kHz |
 | `ul_sched_se` | computed in GUI | `ul_tbs / (ul_nprb * 12 * ul_nsymb)` | bit/s/Hz |
 | `ul_app_se` | computed in GUI | UL iperf throughput / active UL BWP bandwidth | bit/s/Hz |
+| `ul_rv` | `rv` | `nr_get_rv(harq->round % 4)` | redundancy version |
+| `ul_ndi` | `new_data_indicator` | `harq->ndi` | new-data indicator |
+| `ul_target_code_rate` | `target_code_rate` | `harq->sched_pusch.R` | code rate numerator, 1/1024 units |
+| `ul_cqi` | `ul_cqi` | PUSCH decode callback | quantized UL CQI; empty for `0xff` |
+| `ul_tpmi` | `tpmi` | scheduled UL TPMI | TPMI index |
+| `ul_tpmi_valid` | `tpmi_valid` | SRS feedback validity | 1 when TPMI comes from valid SRS feedback |
+| `ul_rssi_dbfs` | `rssi` | PUSCH decode callback | RSSI in dBFS; empty when unavailable |
 
 The remaining DL columns (`dl_mcs`, `dl_nprb`, `dl_layers`, `dl_qm`,
 `dl_cqi`, `dl_sinr`, `dl_bler`) are read directly from the corresponding
 `gnb_dl_meas_shm_t` fields described in the full mapping under
 `doc/local-edit/measurements/gNB_gui_monitor.md`.
+
+`dl_cqi` is the UE-reported 0-15 wideband CSI CQI. `ul_cqi` is the gNB
+PUSCH-SNR index in the range 0-255 and uses
+`(640 + SNR_x10) / 5`; the two fields represent different measurements.
 
 The application-level SE calculations are:
 

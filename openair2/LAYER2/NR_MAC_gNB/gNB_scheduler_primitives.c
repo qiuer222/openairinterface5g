@@ -2703,6 +2703,7 @@ void reset_sched_ctrl(NR_UE_sched_ctrl_t *sched_ctrl)
   sched_ctrl->srs_feedback.ul_ri = 0;
   sched_ctrl->srs_feedback.tpmi = 0;
   sched_ctrl->srs_feedback.sri = 0;
+  sched_ctrl->srs_feedback.valid = false;
   sched_ctrl->dl_sinr_valid = false;
   sched_ctrl->dl_sinr_db_x10 = 0;
 }

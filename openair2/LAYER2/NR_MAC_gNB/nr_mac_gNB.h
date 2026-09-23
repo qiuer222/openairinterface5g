@@ -466,6 +466,7 @@ typedef struct NR_sched_pusch {
   int8_t ul_harq_pid;
   uint8_t nrOfLayers;
   int tpmi;
+  bool tpmi_valid;
 
   // time_domain_allocation is the index of a list of tda
   int time_domain_allocation;
