@@ -49,8 +49,9 @@ CHANNEL_FILE=/tmp/srs_channel.bin \
 ```
 
 `CHANNEL_FILE` does not require the legacy `chanmod` option. A missing or
-invalid configured file is fatal. During runtime, an unsupported read-block
-size disables FD replay and falls back to the ordinary RFSim path.
+invalid configured file is fatal. During runtime, an unaligned read block
+bypasses FD replay for that block and the next complete symbol/slot resumes
+replay.
 
 ## Related Documents
 

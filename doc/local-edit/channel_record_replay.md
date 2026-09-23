@@ -269,26 +269,43 @@ for each RX:
 The forward and inverse transforms use OAI's `dft` and `idft`
 implementations.
 
-### 5.5 CP layouts
+### 5.5 Supported read blocks
 
-Fd replay accepts exactly one of these slot sizes:
-
-Regular first CP:
-
-```text
-symbols_per_slot * (fft_size + cp_length)
-```
-
-Long first CP:
+The replay layer accepts a complete sequence of one or more OFDM symbols from
+the beginning of a slot:
 
 ```text
-cp_length0
-+ fft_size
-+ (symbols_per_slot - 1) * (fft_size + cp_length)
+regular sequence:
+  N * (fft_size + cp_length)
+
+long-first sequence:
+  fft_size + cp_length0
+  + (N - 1) * (fft_size + cp_length)
 ```
 
-Any other read-block size disables FD replay and falls back to the ordinary
-RFSim receive path.
+where `1 <= N <= symbols_per_slot`. This includes:
+
+- a complete regular-CP slot;
+- a complete long-first-CP slot;
+- a standalone regular-CP symbol;
+- a standalone long-first-CP symbol.
+
+The last case is used by `nr-uesoftmodem` immediately after synchronization.
+For the usual 30 kHz/106 PRB configuration, the standalone long-CP symbol is:
+
+```text
+2048 + 176 = 2224 samples
+```
+
+This block is now processed by FD replay instead of disabling it.
+
+If a synchronization or re-synchronization read ends with an unaligned sample
+block, that individual block bypasses FD replay and uses the ordinary receive
+path. Replay remains enabled and resumes on the next complete symbol or slot.
+It is not permanently disabled by an unaligned read.
+
+Dimension mismatches or errors inside FFT/IFFT processing remain fatal for the
+active replay session and disable the FD branch.
 
 The file contains only one H slot. It is reused for every successful replay
 slot; there is no slot counter or SFN/slot-number lookup.
@@ -330,15 +347,20 @@ Check that `CHANNEL_FILE` is visible to the modem process. With `sudo`, use:
 sudo env CHANNEL_FILE=/tmp/srs_channel.bin <modem-command>
 ```
 
-### Replay disables during runtime
+### An unaligned read block is reported
 
 Check the warning:
 
 ```text
-[rfsim] Disabling fd channel replay: unsupported read size ...
+[rfsim] fd channel replay bypasses unaligned read size ...
 ```
 
-The configured CP and FFT metadata must match the runtime slot layout.
+This is expected for a partial synchronization block. The current block uses
+the ordinary receive path, while replay remains enabled for later complete
+symbols and slots.
+
+If replay is disabled permanently, check the configured FFT, CP, and antenna
+dimensions against the runtime configuration.
 
 ### Channel dimensions do not match
 
