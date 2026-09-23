@@ -195,16 +195,38 @@ The file contains only one channel slot.
 
 ### 5.1 Activation
 
-Set `CHANNEL_FILE` on the modem process whose receive path should be replayed:
+Run the commands from `cmake_targets/ran_build/build`.
+
+Terminal 1, gNB:
 
 ```bash
-CHANNEL_FILE=/tmp/srs_channel.bin \
-  ./cmake_targets/ran_build/build/nr-softmodem \
-  -O targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.sa.band78.fr1.106PRB.2x2.usrpn300.conf \
+sudo env CHANNEL_FILE=/tmp/srs_channel.bin \
+  ./nr-softmodem \
+  -O ../../../targets/PROJECTS/GENERIC-NR-5GC/CONF/gnb.sa.band78.fr1.106PRB.2x2.usrpn300.conf \
+  --gNBs.[0].min_rxtxtime 3 \
+  --rfsim \
+  --rfsimulator.[0].serveraddr server
+```
+
+Terminal 2, UE:
+
+```bash
+sudo env CHANNEL_FILE=/tmp/srs_channel.bin \
+  ./nr-uesoftmodem \
+  -r 106 \
+  --numerology 1 \
+  --band 78 \
+  -C 3319680000 \
+  --ue-nb-ant-tx 2 \
+  --ue-nb-ant-rx 2 \
+  --uecap_file ../../../targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports2.xml \
+  -O ../../../ci-scripts/conf_files/nrue.uicc.conf \
   --rfsim
 ```
 
 `chanmod` is not required for FD replay.
+`CHANNEL_FILE` should be set on each side whose receive direction should replay
+the recorded H. The example sets it on both processes.
 
 Expected load message:
 
@@ -493,3 +515,46 @@ Acceptance tests for Method 1 should include:
 - 2x2 and 4x4 antenna configurations;
 - no timestamp or timing-advance regression;
 - no steady-state bypass or replay-disable messages.
+
+### 9.4 Method 1 implementation status
+
+The first implementation of Method 1 is present in `executables/nr-ue-ru.c`.
+
+It adds a per-card replay FIFO around the RFSim read function:
+
+- the UE PHY can still request arbitrary sample counts;
+- the adapter requests exactly one complete OFDM symbol from RFSim at a time;
+- symbol length is selected from `get_samples_symbol_duration()`, so the
+  adapter follows the normal CP and long-CP layout;
+- requested samples are copied out of the FIFO at the original timestamp;
+- extra prefetched samples remain queued for the next call.
+
+The FIFO stores samples interleaved by antenna and allocates storage according
+to the runtime antenna count. There is one state object per `MAX_CARDS`
+entry, so the implementation has no fixed 2x2 assumption and can be used by
+4x4 or multi-RU configurations.
+
+Multi-antenna behavior:
+
+- `num_antennas` is taken from each read call, and a change resets the FIFO;
+- fetch buffers contain one contiguous symbol per antenna;
+- queued samples are indexed as `[sample][antenna]`;
+- each output antenna is copied independently.
+
+The implementation is enabled only when:
+
+```text
+device type == RFSIMULATOR
+CHANNEL_FILE is set
+```
+
+Initial 2x2 validation completed with:
+
+- `CHANNEL_FILE` set on the UE;
+- successful initial synchronization;
+- sustained DL/UL scheduling;
+- no `Disabling fd channel replay` messages;
+- no unaligned bypass in steady state.
+
+The 4x4 path uses the same dynamic per-antenna loops, but still requires an
+end-to-end runtime test with a matching 4x4 `FDCH` file.

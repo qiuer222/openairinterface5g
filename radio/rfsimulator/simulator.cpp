@@ -202,6 +202,7 @@ typedef struct {
   rfsim_beam_ctrl_t *beam_ctrl;
   fd_channel_t *fd_channel;
   bool fd_channel_disabled;
+  bool fd_channel_unsupported_logged;
 } rfsimulator_state_t;
 
 /**
@@ -1279,25 +1280,6 @@ static bool flushInput(rfsimulator_state_t *t, int timeout, bool first_time)
   return nfds > 0;
 }
 
-static bool fd_slot_layout(const fd_channel_info_t *info, int nsamps, int *first_cp)
-{
-  const int fft = info->fft_size;
-  const int cp = info->cp_length;
-  const int regular_slot = info->symbols_per_slot * (fft + cp);
-  const int long_first_slot =
-      info->cp_length0 + fft + (info->symbols_per_slot - 1) * (fft + cp);
-
-  if (nsamps == long_first_slot) {
-    *first_cp = info->cp_length0;
-    return true;
-  }
-  if (nsamps == regular_slot) {
-    *first_cp = cp;
-    return true;
-  }
-  return false;
-}
-
 static bool apply_fd_channel(rfsimulator_state_t *t,
                              buffer_t *ptr,
                              c16_t **input,
@@ -1321,16 +1303,19 @@ static bool apply_fd_channel(rfsimulator_state_t *t,
   }
 
   int first_cp = 0;
-  if (!fd_slot_layout(info, nsamps, &first_cp)) {
-    t->fd_channel_disabled = true;
-    LOG_W(HW,
-          "[rfsim] Disabling fd channel replay: unsupported read size %d for "
-          "%d symbols, fft=%d, cp=%d, cp0=%d\n",
-          nsamps,
-          info->symbols_per_slot,
-          info->fft_size,
-          info->cp_length,
-          info->cp_length0);
+  const int symbol_count = fd_channel_symbol_count(info, nsamps, &first_cp);
+  if (symbol_count == 0) {
+    if (!t->fd_channel_unsupported_logged) {
+      t->fd_channel_unsupported_logged = true;
+      LOG_W(HW,
+            "[rfsim] fd channel replay bypasses unaligned read size %d for "
+            "%d symbols, fft=%d, cp=%d, cp0=%d\n",
+            nsamps,
+            info->symbols_per_slot,
+            info->fft_size,
+            info->cp_length,
+            info->cp_length0);
+    }
     return false;
   }
 
@@ -1346,7 +1331,7 @@ static bool apply_fd_channel(rfsimulator_state_t *t,
     rx_ptrs[rx] = rx_symbols[rx].data();
 
   int sample_offset = 0;
-  for (int symbol = 0; symbol < info->symbols_per_slot; symbol++) {
+  for (int symbol = 0; symbol < symbol_count; symbol++) {
     const int cp = symbol == 0 ? first_cp : info->cp_length;
     if (sample_offset + cp + info->fft_size > nsamps)
       return false;

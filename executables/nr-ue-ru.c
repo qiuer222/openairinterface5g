@@ -9,6 +9,10 @@
 #include "common/config/config_userapi.h"
 #include "openair1/PHY/phy_extern_nr_ue.h"
 
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
 /* NR UE RU configuration section name */
 #define CONFIG_STRING_NRUE_RU_LIST "RUs"
 
@@ -90,6 +94,179 @@ static nrUE_RU_params_t *nrue_rus;
 
 openair0_config_t openair0_cfg[MAX_CARDS];
 openair0_device_t openair0_dev[MAX_CARDS];
+
+/*
+ * RFSim FD replay consumes symbol-aligned blocks. The UE PHY can request
+ * arbitrary sizes after timing shifts, so prefetch complete symbols and expose
+ * the requested slice through a per-card FIFO.
+ */
+typedef struct {
+  openair0_device_t *device;
+  int num_antennas;
+  c16_t *fifo;
+  c16_t *fetch;
+  int capacity;
+  int fetch_capacity;
+  int head;
+  int count;
+  openair0_timestamp_t next_timestamp;
+  uint32_t next_slot;
+  uint32_t next_symbol;
+  bool initialized;
+} nrue_replay_fifo_t;
+
+static nrue_replay_fifo_t nrue_replay_fifos[MAX_CARDS];
+
+static bool nrue_replay_fifo_enabled(const openair0_device_t *device)
+{
+  const char *channel_file = getenv("CHANNEL_FILE");
+  return device->type == RFSIMULATOR && channel_file && channel_file[0] != '\0';
+}
+
+static void nrue_replay_fifo_reset(nrue_replay_fifo_t *state)
+{
+  state->head = 0;
+  state->count = 0;
+  state->next_timestamp = 0;
+  state->next_slot = 0;
+  state->next_symbol = 0;
+  state->initialized = false;
+}
+
+static bool nrue_replay_fifo_reserve(nrue_replay_fifo_t *state, int samples)
+{
+  if (samples <= state->capacity)
+    return true;
+
+  c16_t *new_fifo = malloc((size_t)samples * state->num_antennas * sizeof(*new_fifo));
+  if (!new_fifo)
+    return false;
+
+  for (int i = 0; i < state->count; i++) {
+    const int src = (state->head + i) % state->capacity;
+    memcpy(&new_fifo[(size_t)i * state->num_antennas],
+           &state->fifo[(size_t)src * state->num_antennas],
+           state->num_antennas * sizeof(*new_fifo));
+  }
+  free(state->fifo);
+  state->fifo = new_fifo;
+  state->capacity = samples;
+  state->head = 0;
+  return true;
+}
+
+static bool nrue_replay_fifo_append(nrue_replay_fifo_t *state, int samples)
+{
+  if (!nrue_replay_fifo_reserve(state, state->count + samples))
+    return false;
+
+  for (int i = 0; i < samples; i++) {
+    const int dst = (state->head + state->count + i) % state->capacity;
+    for (int antenna = 0; antenna < state->num_antennas; antenna++)
+      state->fifo[(size_t)dst * state->num_antennas + antenna] =
+          state->fetch[(size_t)antenna * state->fetch_capacity + i];
+  }
+  state->count += samples;
+  return true;
+}
+
+static bool nrue_replay_fifo_fetch_symbol(nrue_replay_fifo_t *state,
+                                          const NR_DL_FRAME_PARMS *fp)
+{
+  const int samples =
+      get_samples_symbol_duration(fp, state->next_slot, state->next_symbol, 1);
+  if (samples <= 0)
+    return false;
+
+  if (samples > state->fetch_capacity) {
+    c16_t *new_fetch =
+        realloc(state->fetch,
+                (size_t)samples * state->num_antennas * sizeof(*new_fetch));
+    if (!new_fetch)
+      return false;
+    state->fetch = new_fetch;
+    state->fetch_capacity = samples;
+  }
+
+  void *fetch_ptrs[state->num_antennas];
+  for (int antenna = 0; antenna < state->num_antennas; antenna++)
+    fetch_ptrs[antenna] =
+        &state->fetch[(size_t)antenna * state->fetch_capacity];
+
+  openair0_timestamp_t timestamp = 0;
+  const int received = state->device->trx_read_func(
+      state->device, &timestamp, fetch_ptrs, samples, state->num_antennas);
+  if (received != samples)
+    return false;
+
+  if (!state->initialized) {
+    state->next_slot = get_slot_from_timestamp(timestamp, fp);
+    state->next_symbol = 0;
+    state->next_timestamp = timestamp;
+    state->initialized = true;
+  } else if (timestamp != state->next_timestamp) {
+    LOG_W(HW,
+          "RFSim replay FIFO timestamp discontinuity: expected %ld, got %ld; "
+          "realigning\n",
+          state->next_timestamp,
+          timestamp);
+    nrue_replay_fifo_reset(state);
+    state->next_slot = get_slot_from_timestamp(timestamp, fp);
+    state->next_symbol = 0;
+    state->next_timestamp = timestamp;
+    state->initialized = true;
+  }
+
+  if (!nrue_replay_fifo_append(state, samples))
+    return false;
+
+  state->next_timestamp += samples;
+  state->next_symbol++;
+  if (state->next_symbol == fp->symbols_per_slot) {
+    state->next_symbol = 0;
+    state->next_slot = (state->next_slot + 1) % fp->slots_per_frame;
+  }
+  return true;
+}
+
+static int nrue_replay_fifo_read(PHY_VARS_NR_UE *UE,
+                                 openair0_device_t *device,
+                                 int card,
+                                 openair0_timestamp_t *ptimestamp,
+                                 void **buff,
+                                 int nsamps,
+                                 int num_antennas)
+{
+  nrue_replay_fifo_t *state = &nrue_replay_fifos[card];
+  const NR_DL_FRAME_PARMS *fp =
+      UE->sl_mode == 2 ? &UE->SL_UE_PHY_PARAMS.sl_frame_params : &UE->frame_parms;
+
+  if (nsamps <= 0)
+    return 0;
+
+  if (state->device != device || state->num_antennas != num_antennas
+      || !device->firstTS_initialized) {
+    state->device = device;
+    state->num_antennas = num_antennas;
+    nrue_replay_fifo_reset(state);
+  }
+
+  while (state->count < nsamps) {
+    if (!nrue_replay_fifo_fetch_symbol(state, fp))
+      return -1;
+  }
+
+  *ptimestamp = state->next_timestamp - state->count;
+  for (int i = 0; i < nsamps; i++) {
+    const int src = (state->head + i) % state->capacity;
+    for (int antenna = 0; antenna < num_antennas; antenna++)
+      ((c16_t *)buff[antenna])[i] =
+          state->fifo[(size_t)src * num_antennas + antenna];
+  }
+  state->head = (state->head + nsamps) % state->capacity;
+  state->count -= nsamps;
+  return nsamps;
+}
 
 int nrue_get_cell_count(void)
 {
@@ -375,6 +552,9 @@ void nrue_ru_end(void)
       openair0_dev[ru_id].trx_get_stats_func(&openair0_dev[ru_id]);
     if (openair0_dev[ru_id].trx_end_func)
       openair0_dev[ru_id].trx_end_func(&openair0_dev[ru_id]);
+    free(nrue_replay_fifos[ru_id].fifo);
+    free(nrue_replay_fifos[ru_id].fetch);
+    memset(&nrue_replay_fifos[ru_id], 0, sizeof(nrue_replay_fifos[ru_id]));
   }
 }
 
@@ -447,7 +627,15 @@ int nrue_ru_read(PHY_VARS_NR_UE *UE, openair0_timestamp_t *ptimestamp, void **bu
 {
   openair0_device_t *dev0 = &openair0_dev[UE->rf_map.card];
   openair0_timestamp_t tmp_timestamp;
-  int ret = dev0->trx_read_func(dev0, &tmp_timestamp, buff, nsamps, num_antennas);
+  int ret;
+  if (nrue_replay_fifo_enabled(dev0))
+    ret = nrue_replay_fifo_read(
+        UE, dev0, UE->rf_map.card, &tmp_timestamp, buff, nsamps, num_antennas);
+  else
+    ret = dev0->trx_read_func(dev0, &tmp_timestamp, buff, nsamps, num_antennas);
+  if (ret < 0)
+    return ret;
+  const int main_ret = ret;
   if (!dev0->firstTS_initialized) {
     dev0->firstTS = tmp_timestamp;
     dev0->firstTS_initialized = true;
@@ -473,14 +661,21 @@ int nrue_ru_read(PHY_VARS_NR_UE *UE, openair0_timestamp_t *ptimestamp, void **bu
       continue;
 
     dev0 = &openair0_dev[ru_id];
-    dev0->trx_read_func(dev0, &tmp_timestamp, tmp_buf, nsamps, num_antennas);
+    if (nrue_replay_fifo_enabled(dev0))
+      ret = nrue_replay_fifo_read(
+          UE, dev0, ru_id, &tmp_timestamp, tmp_buf, nsamps, num_antennas);
+    else
+      ret = dev0->trx_read_func(
+          dev0, &tmp_timestamp, tmp_buf, nsamps, num_antennas);
+    if (ret < 0)
+      return ret;
     if (!dev0->firstTS_initialized) {
       dev0->firstTS = tmp_timestamp;
       dev0->firstTS_initialized = true;
     }
   }
 
-  return ret;
+  return main_ret;
 }
 
 int nrue_ru_write(PHY_VARS_NR_UE *UE, openair0_timestamp_t timestamp, void **buff, int nsamps, int num_antennas, int flags)

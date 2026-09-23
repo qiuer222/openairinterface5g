@@ -110,6 +110,27 @@ int main(void)
   }
   write_test_file(path, identity);
 
+  fd_channel_t *layout_channel = fd_channel_load(path, 1, 1);
+  assert(layout_channel != NULL);
+  const fd_channel_info_t *info = fd_channel_info(layout_channel);
+  int first_cp = -1;
+  assert(fd_channel_symbol_count(info, TEST_FFT_SIZE + 11, &first_cp) == 1);
+  assert(first_cp == 11);
+  assert(fd_channel_symbol_count(info, TEST_FFT_SIZE + 9, &first_cp) == 1);
+  assert(first_cp == 9);
+  assert(fd_channel_symbol_count(info, info->symbols_per_slot * (TEST_FFT_SIZE + 9),
+                                 &first_cp)
+         == info->symbols_per_slot);
+  assert(fd_channel_symbol_count(info,
+                                 11 + TEST_FFT_SIZE
+                                     + (info->symbols_per_slot - 1)
+                                           * (TEST_FFT_SIZE + 9),
+                                 &first_cp)
+         == info->symbols_per_slot);
+  assert(first_cp == 11);
+  assert(fd_channel_symbol_count(info, 100, &first_cp) == 0);
+  fd_channel_free(layout_channel);
+
   int peak = -1;
   double peak_magnitude = apply_and_peak_magnitude(path, 3, &peak);
   assert(peak == 3);

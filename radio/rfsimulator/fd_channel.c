@@ -239,6 +239,40 @@ const fd_channel_info_t *fd_channel_info(const fd_channel_t *channel)
   return channel ? &channel->info : NULL;
 }
 
+int fd_channel_symbol_count(const fd_channel_info_t *info,
+                            int nsamps,
+                            int *first_cp)
+{
+  if (!info || !first_cp || nsamps <= 0)
+    return 0;
+
+  const int fft = info->fft_size;
+  const int cp = info->cp_length;
+  const int symbol_samples = fft + cp;
+  const int first_symbol_samples = fft + info->cp_length0;
+  if (symbol_samples <= 0 || first_symbol_samples <= 0)
+    return 0;
+
+  if (nsamps >= first_symbol_samples
+      && (nsamps - first_symbol_samples) % symbol_samples == 0) {
+    const int count = 1 + (nsamps - first_symbol_samples) / symbol_samples;
+    if (count <= info->symbols_per_slot) {
+      *first_cp = info->cp_length0;
+      return count;
+    }
+  }
+
+  if (nsamps % symbol_samples == 0) {
+    const int count = nsamps / symbol_samples;
+    if (count >= 1 && count <= info->symbols_per_slot) {
+      *first_cp = cp;
+      return count;
+    }
+  }
+
+  return 0;
+}
+
 int fd_cfft(const c16_t *in, c16_t *out, int fft_size, bool inverse)
 {
   if (!in || !out || !fd_supported_fft_size(fft_size) || !dft || !idft)

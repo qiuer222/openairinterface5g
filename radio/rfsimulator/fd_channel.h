@@ -23,6 +23,9 @@ typedef struct fd_channel fd_channel_t;
 fd_channel_t *fd_channel_load(const char *path, int expected_rx, int expected_tx);
 void fd_channel_free(fd_channel_t *channel);
 const fd_channel_info_t *fd_channel_info(const fd_channel_t *channel);
+int fd_channel_symbol_count(const fd_channel_info_t *info,
+                            int nsamps,
+                            int *first_cp);
 
 int fd_cfft(const c16_t *in, c16_t *out, int fft_size, bool inverse);
 int fd_apply_symbol(fd_channel_t *channel,
