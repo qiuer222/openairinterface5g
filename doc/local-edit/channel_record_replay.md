@@ -376,3 +376,120 @@ example, a 2x2 file cannot be loaded by a 1x1 RFSim configuration.
 | `radio/rfsimulator/simulator.cpp` | Device initialization, slot splitting, CP handling, fallback |
 | `gui/npy_to_rfsim_bin.py` | `.npy` to `FDCH` converter and verifier |
 | `radio/rfsimulator/tests/test_fd_channel.c` | Replay unit test |
+
+## 9. Complete-Replay Alignment Options
+
+The current implementation supports complete symbols and slots, but bypasses
+an individual read block whose samples do not end on an OFDM symbol boundary.
+
+UE timing correction can produce blocks such as:
+
+```text
+2224
+28495
+30176
+```
+
+For `fft_size=2048`, `cp_length=144`, and `cp_length0=176`:
+
+```text
+regular symbol = 2192 samples
+long-CP symbol = 2224 samples
+
+28495 = 13 * 2192 - 1
+30176 = 13 * 2192 + 1680
+```
+
+`2224` is a complete long-CP symbol. The other two are not complete symbol
+boundaries and require a buffering or alignment design to replay every sample.
+
+### 9.1 Method 1: Align UE reads before RFSim
+
+Add a UE-side sample FIFO around the RFSim read path, preferably as an
+RFSim-replay-specific wrapper around `nrue_ru_read()`.
+
+The FIFO would:
+
+1. Receive arbitrary sample requests from the UE PHY.
+2. Request symbol-aligned sample amounts from the RFSim device.
+3. Return exactly the number and timestamp requested by the PHY.
+4. Retain the extra samples for the next call.
+5. Reset alignment state after synchronization, re-synchronization, or a
+   timestamp discontinuity.
+
+Important implementation points:
+
+- preserve the existing `firstTS` and returned `ptimestamp` mapping;
+- account for `iq_shift_to_apply` and timing-advance changes;
+- support positive and negative timing shifts;
+- maintain one FIFO per active RF device/UE when multiple RUs are used;
+- bypass or reset the FIFO if the RFSim stream is restarted.
+
+Estimated impact:
+
+| Item | Assessment |
+|---|---|
+| Main files | `executables/nr-ue-ru.c`, limited integration in `executables/nr-ue.c` |
+| Estimated code change | 150-300 lines |
+| Main risk | UE synchronization and timestamp regressions |
+| Added replay latency | None if one symbol is prefetched |
+| Testing effort | Medium-high |
+| Estimated effort | 3-5 engineering days |
+
+Method 1 is appropriate when the requirement is complete replay specifically
+for the UE side.
+
+### 9.2 Method 2: Stateful alignment inside RFSim
+
+Move symbol alignment and buffering into `fd_channel` or the RFSim read path.
+Each peer and beam must maintain:
+
+- current symbol and CP phase;
+- partial input symbol history;
+- processed output FIFO;
+- absolute timestamp mapping;
+- packet lookahead and packet lifetime state.
+
+If the current request ends in the middle of an OFDM symbol, RFSim must obtain
+samples from a later timestamp before it can perform the FFT. This requires
+either:
+
+- one-symbol lookahead, increasing read latency; or
+- delayed output with timestamp compensation, which risks changing the
+  timestamp contract expected by the modem.
+
+Estimated impact:
+
+| Item | Assessment |
+|---|---|
+| Main files | `radio/rfsimulator/fd_channel.c/.h`, `radio/rfsimulator/simulator.cpp`, `buffer_t` state |
+| Estimated code change | 300-600 lines |
+| Main risk | multi-peer, multi-beam, timestamp, and packet-lifetime regressions |
+| Added replay latency | Usually one OFDM symbol |
+| Testing effort | High |
+| Estimated effort | 1-2 engineering weeks |
+
+Method 2 is appropriate when complete replay must be guaranteed for every
+caller and every arbitrary read split.
+
+### 9.3 Recommended approach
+
+For the current UE-side issue, Method 1 is preferred:
+
+- its scope is limited to the UE RF adapter;
+- the existing `fd_channel` contract remains simple;
+- no additional replay latency is required;
+- RFSim peer, beam, and packet handling remain unchanged.
+
+Method 2 should be selected if complete replay is later required for arbitrary
+modems, including gNB-side and multi-peer configurations.
+
+Acceptance tests for Method 1 should include:
+
+- `2224`, `28495`, and `30176` sample requests;
+- full regular and long-first slots;
+- initial synchronization and re-synchronization;
+- positive and negative timing shifts;
+- 2x2 and 4x4 antenna configurations;
+- no timestamp or timing-advance regression;
+- no steady-state bypass or replay-disable messages.
