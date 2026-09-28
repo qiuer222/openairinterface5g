@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze one OAI CSI-RS or SRS channel snapshot from a .npy file."""
+"""Analyze OAI CSI-RS or SRS channel snapshots from a file or directory."""
 
 from __future__ import annotations
 
@@ -107,6 +107,19 @@ def _subcarrier_frequencies_hz(
     if center_frequency_hz is not None:
         frequencies_hz += float(center_frequency_hz)
     return frequencies_hz
+
+
+def _frequency_segments(
+    frequencies_hz: np.ndarray, scs_hz: float
+) -> List[np.ndarray]:
+    """Split sorted frequencies into contiguous measured ranges."""
+    frequencies_hz = np.asarray(frequencies_hz, dtype=float)
+    if frequencies_hz.size <= 1:
+        return [np.arange(frequencies_hz.size, dtype=np.int64)]
+    break_indices = (
+        np.flatnonzero(np.diff(frequencies_hz) > 1.5 * float(scs_hz)) + 1
+    )
+    return np.split(np.arange(frequencies_hz.size), break_indices)
 
 
 def _subcarrier_energy_metrics(
@@ -592,12 +605,6 @@ def analyze_channel(
     active = active_subcarriers(h)
     if active.size == 0:
         raise ValueError("channel has no active subcarriers")
-    subcarrier_energy = np.sum(
-        np.abs(h[:, :, active]) ** 2, axis=(0, 1)
-    )
-    subcarrier_energy_metrics = _subcarrier_energy_metrics(
-        subcarrier_energy, active
-    )
     fft_size = h.shape[-1]
     if subcarrier_offset is None:
         subcarrier_offset = (
@@ -611,6 +618,15 @@ def analyze_channel(
         subcarrier_offset,
         scs_hz,
         center_frequency_hz,
+    )
+    frequency_order = np.argsort(frequencies_hz, kind="stable")
+    active = active[frequency_order]
+    frequencies_hz = frequencies_hz[frequency_order]
+    subcarrier_energy = np.sum(
+        np.abs(h[:, :, active]) ** 2, axis=(0, 1)
+    )
+    subcarrier_energy_metrics = _subcarrier_energy_metrics(
+        subcarrier_energy, active
     )
 
     finite_count = int(np.count_nonzero(np.all(np.isfinite(h), axis=(0, 1))))
@@ -679,6 +695,7 @@ def analyze_channel(
         "active": active,
         "frequencies_hz": frequencies_hz,
         "center_frequency_hz": center_frequency_hz,
+        "scs_hz": float(scs_hz),
         "subcarrier_energy": subcarrier_energy,
         "singular_values": sv,
         "condition": condition,
@@ -838,7 +855,11 @@ def _format_report(metrics: Dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
+def _save_figures(
+    plot_data: Dict,
+    output_dir: str,
+    filename_suffix: Optional[str] = None,
+) -> List[str]:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -852,6 +873,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     impulse = plot_data["impulse"]
     delays = plot_data["delays"]
     frequencies_hz = plot_data["frequencies_hz"]
+    scs_hz = plot_data["scs_hz"]
     subcarrier_energy = plot_data["subcarrier_energy"]
     outputs: List[str] = []
     if plot_data["center_frequency_hz"] is None:
@@ -875,6 +897,26 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
         frequency_label = f"frequency ({frequency_unit})"
     frequency_values = frequencies_hz / frequency_scale
 
+    def figure_path(base_name: str) -> str:
+        if filename_suffix:
+            return os.path.join(
+                output_dir, f"{base_name}_{filename_suffix}.png"
+            )
+        return os.path.join(output_dir, f"{base_name}.png")
+
+    def plot_series(ax, values: np.ndarray, **kwargs) -> None:
+        for segment_index, segment in enumerate(
+            _frequency_segments(frequencies_hz, scs_hz)
+        ):
+            segment_kwargs = dict(kwargs)
+            if segment_index and "label" in segment_kwargs:
+                segment_kwargs["label"] = "_nolegend_"
+            ax.plot(
+                frequency_values[segment],
+                values[segment],
+                **segment_kwargs,
+            )
+
     fig, axes = plt.subplots(
         h.shape[0],
         h.shape[1],
@@ -883,20 +925,21 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     )
     for rx in range(h.shape[0]):
         for tx in range(h.shape[1]):
-            axes[rx, tx].plot(
-                frequency_values, np.abs(h[rx, tx, active])
+            plot_series(
+                axes[rx, tx],
+                np.abs(h[rx, tx, active]),
             )
             axes[rx, tx].set_title(f"|H| rx{rx} tx{tx}")
             axes[rx, tx].set_xlabel(frequency_label)
     fig.tight_layout()
-    path = os.path.join(output_dir, "channel_magnitude.png")
+    path = figure_path("channel_magnitude")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     energy_db = 10.0 * np.log10(np.maximum(subcarrier_energy, EPS))
-    ax.plot(frequency_values, energy_db, color="#1f77b4", linewidth=1.5)
+    plot_series(ax, energy_db, color="#1f77b4", linewidth=1.5)
     ax.axhline(
         float(np.mean(energy_db)),
         color="#d62728",
@@ -910,7 +953,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     ax.grid(alpha=0.25)
     ax.legend()
     fig.tight_layout()
-    path = os.path.join(output_dir, "channel_subcarrier_energy.png")
+    path = figure_path("channel_subcarrier_energy")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)
@@ -923,37 +966,37 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     )
     for rx in range(h.shape[0]):
         for tx in range(h.shape[1]):
-            axes[rx, tx].plot(
-                frequency_values,
+            plot_series(
+                axes[rx, tx],
                 np.unwrap(np.angle(h[rx, tx, active])),
             )
             axes[rx, tx].set_title(f"phase rx{rx} tx{tx}")
             axes[rx, tx].set_xlabel(frequency_label)
     fig.tight_layout()
-    path = os.path.join(output_dir, "channel_phase.png")
+    path = figure_path("channel_phase")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)
 
     fig, ax = plt.subplots(figsize=(10, 5))
     for idx in range(sv.shape[1]):
-        ax.plot(frequency_values, sv[:, idx], label=f"SV{idx + 1}")
+        plot_series(ax, sv[:, idx], label=f"SV{idx + 1}")
     ax.set_xlabel(frequency_label)
     ax.set_ylabel("singular value")
     ax.legend()
     fig.tight_layout()
-    path = os.path.join(output_dir, "channel_singular_values.png")
+    path = figure_path("channel_singular_values")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)
 
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(frequency_values, condition)
+    plot_series(ax, condition)
     ax.set_yscale("log")
     ax.set_xlabel(frequency_label)
     ax.set_ylabel("condition number")
     fig.tight_layout()
-    path = os.path.join(output_dir, "channel_condition_number.png")
+    path = figure_path("channel_condition_number")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)
@@ -970,7 +1013,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
             axes[rx, tx].set_title(f"impulse rx{rx} tx{tx}")
             axes[rx, tx].set_xlabel("delay (samples)")
     fig.tight_layout()
-    path = os.path.join(output_dir, "channel_impulse_response.png")
+    path = figure_path("channel_impulse_response")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)
@@ -987,7 +1030,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
     ax.set_ylabel("PDP (dB)")
     ax.legend(fontsize=8)
     fig.tight_layout()
-    path = os.path.join(output_dir, "channel_pdp.png")
+    path = figure_path("channel_pdp")
     fig.savefig(path, dpi=160)
     plt.close(fig)
     outputs.append(path)
@@ -999,7 +1042,7 @@ def _save_figures(plot_data: Dict, output_dir: str) -> List[str]:
         ax.set_xlabel("streams")
         ax.set_ylabel("capacity")
         fig.tight_layout()
-        path = os.path.join(output_dir, "channel_capacity.png")
+        path = figure_path("channel_capacity")
         fig.savefig(path, dpi=160)
         plt.close(fig)
         outputs.append(path)
@@ -1026,7 +1069,13 @@ def _json_safe(value):
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("input", help="one CSI-RS/SRS channel .npy file")
+    parser.add_argument(
+        "input",
+        help=(
+            "one CSI-RS/SRS channel .npy file, or a directory containing "
+            "channel_*.npy and srs_*.npy files"
+        ),
+    )
     parser.add_argument("--kind", choices=("auto", "csi", "srs"), default="auto")
     parser.add_argument("--n-rb", type=int, default=106)
     parser.add_argument("--scs", type=float, default=30000.0)
@@ -1051,66 +1100,136 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--max-active-taps", type=int, default=DEFAULT_MAX_ACTIVE_TAPS)
     parser.add_argument("--prune-db", type=float, default=TAP_PRUNING_DB)
     parser.add_argument("--transpose", action="store_true")
-    parser.add_argument("--output-dir")
+    parser.add_argument(
+        "--output-dir",
+        help=(
+            "output directory; required for directory input. In directory "
+            "mode reports are placed here and all figures in figures/"
+        ),
+    )
     return parser.parse_args(argv)
+
+
+def _channel_files(directory: str) -> List[str]:
+    return sorted(
+        entry.path
+        for entry in os.scandir(directory)
+        if entry.is_file()
+        and entry.name.endswith(".npy")
+        and (
+            entry.name.startswith("channel_")
+            or entry.name.startswith("srs_")
+        )
+    )
+
+
+def _output_identifier(path: str) -> str:
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", stem) or "channel"
+
+
+def _analyze_one(args: argparse.Namespace, path: str) -> Tuple[Dict, Dict]:
+    return analyze_channel(
+        path,
+        kind=args.kind,
+        n_rb=args.n_rb,
+        scs_hz=args.scs,
+        subcarrier_offset=args.subcarrier_offset,
+        center_frequency_hz=args.center_frequency_hz,
+        noise_power=args.noise_power,
+        snr_db=args.snr_db,
+        tap_len=args.tap_len,
+        max_active_taps=args.max_active_taps,
+        prune_db=args.prune_db,
+        transpose=args.transpose,
+    )
+
+
+def _write_outputs(
+    metrics: Dict,
+    plot_data: Dict,
+    output_dir: str,
+    filename_suffix: Optional[str] = None,
+) -> List[str]:
+    report = _format_report(metrics)
+    print(report, end="")
+    os.makedirs(output_dir, exist_ok=True)
+    report_base = "channel_analysis"
+    if filename_suffix:
+        report_base = f"{report_base}_{filename_suffix}"
+    report_json = os.path.join(output_dir, f"{report_base}.json")
+    report_text = os.path.join(output_dir, f"{report_base}.txt")
+    with open(report_json, "w", encoding="utf-8") as fp:
+        json.dump(
+            _json_safe(metrics),
+            fp,
+            indent=2,
+            allow_nan=False,
+        )
+    with open(report_text, "w", encoding="utf-8") as fp:
+        fp.write(report)
+    plot_data["capacities"] = metrics["mimo"]["capacity_per_streams"]
+    figures = _save_figures(
+        plot_data,
+        os.path.join(output_dir, "figures"),
+        filename_suffix=filename_suffix,
+    )
+    outputs = [report_json, report_text, *figures]
+    for output in outputs:
+        print(f"wrote {output}")
+    return outputs
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
+    if not os.path.exists(args.input):
+        print(f"error: {args.input} does not exist", file=sys.stderr)
+        return 1
+
+    if os.path.isdir(args.input):
+        if not args.output_dir:
+            print(
+                "error: --output-dir is required for directory input",
+                file=sys.stderr,
+            )
+            return 1
+        try:
+            paths = _channel_files(args.input)
+        except OSError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not paths:
+            print(
+                f"error: no channel_*.npy or srs_*.npy files in {args.input}",
+                file=sys.stderr,
+            )
+            return 1
+
+        failures = 0
+        for path in paths:
+            try:
+                metrics, plot_data = _analyze_one(args, path)
+                _write_outputs(
+                    metrics,
+                    plot_data,
+                    args.output_dir,
+                    filename_suffix=_output_identifier(path),
+                )
+            except (OSError, ValueError) as exc:
+                failures += 1
+                print(f"error: {path}: {exc}", file=sys.stderr)
+        return 1 if failures else 0
+
     try:
-        metrics, plot_data = analyze_channel(
-            args.input,
-            kind=args.kind,
-            n_rb=args.n_rb,
-            scs_hz=args.scs,
-            subcarrier_offset=args.subcarrier_offset,
-            center_frequency_hz=args.center_frequency_hz,
-            noise_power=args.noise_power,
-            snr_db=args.snr_db,
-            tap_len=args.tap_len,
-            max_active_taps=args.max_active_taps,
-            prune_db=args.prune_db,
-            transpose=args.transpose,
-        )
+        metrics, plot_data = _analyze_one(args, args.input)
     except (OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    report = _format_report(metrics)
-    print(report, end="")
     if args.output_dir:
-        os.makedirs(args.output_dir, exist_ok=True)
-        with open(
-            os.path.join(args.output_dir, "channel_analysis.json"),
-            "w",
-            encoding="utf-8",
-        ) as fp:
-            json.dump(
-                _json_safe(metrics),
-                fp,
-                indent=2,
-                allow_nan=False,
-            )
-        with open(
-            os.path.join(args.output_dir, "channel_analysis.txt"),
-            "w",
-            encoding="utf-8",
-        ) as fp:
-            fp.write(report)
-        plot_data["capacities"] = metrics["mimo"]["capacity_per_streams"]
-        figures = _save_figures(
-            plot_data, os.path.join(args.output_dir, "figures")
-        )
-        print(
-            "wrote "
-            + os.path.join(args.output_dir, "channel_analysis.json")
-        )
-        print(
-            "wrote "
-            + os.path.join(args.output_dir, "channel_analysis.txt")
-        )
-        for figure in figures:
-            print(f"wrote {figure}")
+        _write_outputs(metrics, plot_data, args.output_dir)
+    else:
+        print(_format_report(metrics), end="")
     return 0
 
 

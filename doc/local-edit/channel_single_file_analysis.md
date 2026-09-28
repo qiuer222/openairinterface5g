@@ -1,8 +1,9 @@
-# Single Channel File Analysis
+# Channel File and Folder Analysis
 
-This document describes `gui/analyze_channel.py`, which analyzes one CSI-RS or
-SRS channel `.npy` snapshot. It explains the test commands, generated files,
-figures, metrics, and single-snapshot limitations.
+This document describes `gui/analyze_channel.py`, which analyzes either one
+CSI-RS/SRS channel `.npy` snapshot or every channel snapshot in a directory.
+It explains the test commands, generated files, figures, metrics, and
+single-snapshot limitations.
 
 ## 1. Test Commands
 
@@ -20,6 +21,17 @@ Generate the text report, JSON report, and figures:
   gui/record/gui_gnb_log_20260907_201732/srs_20260907_201812_285240.npy \
   --output-dir /tmp/channel_analysis_test
 ```
+
+Analyze every `channel_*.npy` and `srs_*.npy` file in a directory:
+
+```bash
+.venv/bin/python gui/analyze_channel.py \
+  gui/record/gui_gnb_log_20260907_201732 \
+  --output-dir /tmp/channel_folder_analysis
+```
+
+Directory mode requires `--output-dir` and processes only files directly in
+that directory. Other `.npy` files are ignored.
 
 Analyze a CSI-RS file:
 
@@ -56,6 +68,8 @@ supported. The channel kind is inferred from `channel_*` or `srs_*`; use
 
 ## 2. Generated Outputs
 
+### 2.1 Single-file mode
+
 Without `--output-dir`, the script only prints the report. With
 `--output-dir`, it creates:
 
@@ -71,6 +85,37 @@ Without `--output-dir`, the script only prints the report. With
 <output-dir>/figures/channel_pdp.png
 <output-dir>/figures/channel_capacity.png
 ```
+
+### 2.2 Directory mode
+
+For an input directory, the script analyzes each channel file in sorted
+filename order. Each source file gets its own JSON and text report. All figure
+files, for all analyzed channels, are written into the same `figures/`
+directory. The original channel filename without `.npy` is appended to every
+output filename:
+
+```text
+<output-dir>/channel_analysis_<source-name>.json
+<output-dir>/channel_analysis_<source-name>.txt
+<output-dir>/figures/channel_magnitude_<source-name>.png
+<output-dir>/figures/channel_phase_<source-name>.png
+<output-dir>/figures/channel_singular_values_<source-name>.png
+<output-dir>/figures/channel_condition_number_<source-name>.png
+<output-dir>/figures/channel_subcarrier_energy_<source-name>.png
+<output-dir>/figures/channel_impulse_response_<source-name>.png
+<output-dir>/figures/channel_pdp_<source-name>.png
+<output-dir>/figures/channel_capacity_<source-name>.png
+```
+
+For example, `channel_20260907_201812_285240.npy` produces:
+
+```text
+channel_analysis_channel_20260907_201812_285240.json
+figures/channel_magnitude_channel_20260907_201812_285240.png
+```
+
+If one file fails, the error is printed and processing continues with the
+remaining files. The command exits with status 1 if any file failed.
 
 ### `channel_analysis.txt`
 
@@ -171,6 +216,23 @@ f_relative(k) = signed_bin(k) * scs
 f_absolute(k) = center_frequency_hz + f_relative(k)
 ```
 
+After frequency conversion, the analyzer sorts the measured subcarriers by
+their true frequency:
+
+```text
+order = argsort(f_relative)
+```
+
+The same `order` is applied to the saved subcarrier indices, channel samples,
+singular values, condition numbers, and subcarrier-energy values. This keeps
+each measured value paired with its correct frequency and makes the line plots
+continuous without applying `np.fft.fftshift()` to the data alone.
+
+If two adjacent measured frequencies are separated by more than one
+subcarrier, the line is broken at that gap. No line is drawn across an
+unmeasured frequency range. The plots remain line plots rather than scatter
+plots, so phase unwrapping and frequency-selective trends remain visible.
+
 If `--center-frequency-hz` is omitted, `center_frequency_hz` is zero and the
 figures show `f_relative` in MHz. This is the carrier-center-relative
 frequency, not the absolute RF frequency.
@@ -257,7 +319,7 @@ This helps compare:
 | `finite_subcarriers` | Subcarriers containing only finite samples |
 | `invalid_subcarriers` | Subcarriers containing a non-finite sample |
 | `active_subcarriers` | Finite subcarriers with non-zero channel energy |
-| `active_first`, `active_last` | First and last active subcarrier indices |
+| `active_first`, `active_last` | Lowest- and highest-frequency active saved subcarrier indices |
 
 ### Analysis assumptions
 

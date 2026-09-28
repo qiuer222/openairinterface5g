@@ -8,10 +8,12 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
 from gui.analyze_channel import (
+    _frequency_segments,
     analyze_channel,
     load_channel_npy,
     main,
@@ -64,8 +66,8 @@ class AnalyzeChannelTests(unittest.TestCase):
         energy = metrics["subcarrier_energy"]
         self.assertAlmostEqual(energy["linear"]["mean"], 1.25, places=8)
         self.assertAlmostEqual(energy["linear"]["std"], 0.0, places=8)
-        self.assertEqual(energy["peak_subcarrier"], 0)
-        self.assertEqual(energy["minimum_subcarrier"], 0)
+        self.assertEqual(energy["peak_subcarrier"], 16)
+        self.assertEqual(energy["minimum_subcarrier"], 16)
 
     def test_subcarrier_energy_tracks_frequency_selectivity(self):
         h = np.zeros((1, 1, 8), dtype=np.complex128)
@@ -129,6 +131,45 @@ class AnalyzeChannelTests(unittest.TestCase):
         self.assertEqual(
             srs_metrics["assumptions"]["center_frequency_hz"], 3.6e9
         )
+
+    def test_plot_data_is_sorted_by_frequency_with_matching_values(self):
+        h = np.zeros((1, 1, 4), dtype=np.complex128)
+        h[0, 0] = np.array([1.0, 2.0, 3.0, 4.0])
+        frequencies_hz = np.array([30.0, 0.0, 90.0, 60.0]) * 1e3
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "channel_reordered.npy")
+            np.save(path, h)
+            with patch(
+                "gui.analyze_channel._subcarrier_frequencies_hz",
+                return_value=frequencies_hz,
+            ):
+                _, plot_data = analyze_channel(
+                    path,
+                    kind="csi",
+                    n_rb=1,
+                    scs_hz=30e3,
+                    subcarrier_offset=0,
+                )
+
+        np.testing.assert_array_equal(plot_data["active"], [1, 0, 3, 2])
+        np.testing.assert_allclose(
+            plot_data["frequencies_hz"],
+            np.array([0.0, 30.0, 60.0, 90.0]) * 1e3,
+        )
+        np.testing.assert_allclose(
+            plot_data["subcarrier_energy"],
+            [4.0, 1.0, 16.0, 9.0],
+        )
+        np.testing.assert_allclose(
+            plot_data["singular_values"][:, 0],
+            [2.0, 1.0, 4.0, 3.0],
+        )
+
+    def test_frequency_segments_break_at_measurement_gaps(self):
+        frequencies_hz = np.array([0.0, 30.0, 60.0, 150.0, 180.0]) * 1e3
+        segments = _frequency_segments(frequencies_hz, 30e3)
+        np.testing.assert_array_equal(segments[0], [0, 1, 2])
+        np.testing.assert_array_equal(segments[1], [3, 4])
 
     def test_two_tap_channel_recovers_sparse_delays(self):
         fft_size = 32
@@ -219,6 +260,80 @@ class AnalyzeChannelTests(unittest.TestCase):
                     )
                 )
                 > 0
+            )
+
+    def test_directory_mode_writes_one_set_of_outputs_per_channel(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_dir = os.path.join(tmpdir, "channels")
+            output_dir = os.path.join(tmpdir, "analysis")
+            os.makedirs(input_dir)
+            h = np.ones((1, 1, 32), dtype=np.complex128)
+            np.save(os.path.join(input_dir, "channel_one.npy"), h)
+            np.save(os.path.join(input_dir, "srs_two.npy"), h)
+            np.save(os.path.join(input_dir, "unrelated.npy"), h)
+
+            def fake_save_figures(
+                plot_data, output_dir, filename_suffix=None
+            ):
+                os.makedirs(output_dir, exist_ok=True)
+                path = os.path.join(
+                    output_dir,
+                    f"channel_magnitude_{filename_suffix}.png",
+                )
+                with open(path, "wb") as fp:
+                    fp.write(b"png")
+                return [path]
+
+            with patch(
+                "gui.analyze_channel._save_figures",
+                side_effect=fake_save_figures,
+            ), contextlib.redirect_stdout(io.StringIO()):
+                result = main(
+                    [
+                        input_dir,
+                        "--n-rb",
+                        "1",
+                        "--subcarrier-offset",
+                        "0",
+                        "--output-dir",
+                        output_dir,
+                    ]
+                )
+
+            self.assertEqual(result, 0)
+            for identifier in ("channel_one", "srs_two"):
+                self.assertTrue(
+                    os.path.isfile(
+                        os.path.join(
+                            output_dir,
+                            f"channel_analysis_{identifier}.json",
+                        )
+                    )
+                )
+                self.assertTrue(
+                    os.path.isfile(
+                        os.path.join(
+                            output_dir,
+                            f"channel_analysis_{identifier}.txt",
+                        )
+                    )
+                )
+                self.assertTrue(
+                    os.path.isfile(
+                        os.path.join(
+                            output_dir,
+                            "figures",
+                            f"channel_magnitude_{identifier}.png",
+                        )
+                    )
+                )
+            self.assertFalse(
+                os.path.exists(
+                    os.path.join(
+                        output_dir,
+                        "channel_analysis_unrelated.json",
+                    )
+                )
             )
 
 
