@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "nr_ul_estimation.h"
+#include "debug_capture.h"
 #include "PHY/sse_intrin.h"
 #include "PHY/NR_REFSIG/nr_refsig.h"
 #include "PHY/NR_REFSIG/dmrs_nr.h"
@@ -449,6 +450,7 @@ static void nr_pusch_antenna_processing(void *arg)
 }
 
 int nr_pusch_channel_estimation(PHY_VARS_gNB *gNB,
+                                uint32_t frame,
                                 unsigned char Ns,
                                 int nl,
                                 unsigned short p,
@@ -511,6 +513,29 @@ int nr_pusch_channel_estimation(PHY_VARS_gNB *gNB,
 #endif
   }
   //------------------------------------------------//
+
+  if (debug_capture_dmrs_active(frame, Ns, pusch_pdu->rnti)) {
+    const int nb_dmrs = (pusch_pdu->dmrs_config_type == pusch_dmrs_type1 ? 6 : 4) * nb_rb_pusch;
+    const debug_capture_meta_t meta = {
+        .frame = frame,
+        .slot = Ns,
+        .rnti = pusch_pdu->rnti,
+        .layer = nl,
+        .symbol = symbol,
+        .rows = 1,
+        .cols = nb_dmrs,
+        .fft_size = fp->ofdm_symbol_size,
+        .n_rb = nb_rb_pusch,
+        .start_rb = pusch_pdu->bwp_start + pusch_pdu->rb_start,
+        .bwp_start = pusch_pdu->bwp_start,
+        .subcarrier_spacing = pusch_pdu->subcarrier_spacing,
+        .flags = DEBUG_CAPTURE_FLAG_DMRS_SYMBOL,
+    };
+    debug_capture_write(DEBUG_CAPTURE_DMRS_REF,
+                        debug_capture_current_event_id(),
+                        &meta,
+                        pilot);
+  }
 
 #ifdef DEBUG_PUSCH
 

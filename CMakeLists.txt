@@ -905,6 +905,7 @@ set(PHY_SRC_UE
   ${OPENAIR1_DIR}/PHY/nr_phy_common/src/nr_phy_common_srs.c
   ${OPENAIR1_DIR}/PHY/NR_TRANSPORT/nr_scrambling.c
   ${OPENAIR1_DIR}/PHY/NR_REFSIG/refsig.c
+  ${OPENAIR1_DIR}/PHY/NR_ESTIMATION/debug_capture.c
   )
 
   set(PHY_NR_SRC

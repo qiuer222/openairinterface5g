@@ -9,6 +9,7 @@
 #include "PHY/NR_TRANSPORT/nr_dlsch.h"
 #include "PHY/NR_TRANSPORT/nr_ulsch.h"
 #include "PHY/NR_TRANSPORT/gNB_shm.h"
+#include "PHY/NR_ESTIMATION/debug_capture.h"
 #include "PHY/NR_TRANSPORT/nr_dci.h"
 #include "PHY/NR_ESTIMATION/nr_ul_estimation.h"
 #include "nfapi/open-nFAPI/nfapi/public_inc/nfapi_interface.h"
@@ -644,6 +645,10 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
 {
   NR_DL_FRAME_PARMS *frame_parms = &gNB->frame_parms;
   const nfapi_nr_srs_pdu_t *srs_pdu = &srs->srs_pdu;
+  debug_capture_configure(DEBUG_CAPTURE_ROLE_GNB,
+                          get_softmodem_params()->record_srs_ch,
+                          -1,
+                          -1);
 
   c16_t srs_estimated_channel_time[nb_antennas_rx][N_ap][NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size]
         __attribute__((aligned(32)));
@@ -782,6 +787,71 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
 
     noise_power_avg /= nb_antennas_rx;
     *snr = dB_fixed(signal_power_avg) - dB_fixed(max(noise_power_avg, 1));
+
+    if (debug_capture_srs_event(frame_rx, slot_rx, srs_pdu->rnti)) {
+      const uint32_t event_id = debug_capture_current_event_id();
+      debug_capture_meta_t meta = {
+          .frame = frame_rx,
+          .slot = slot_rx,
+          .rnti = srs_pdu->rnti,
+          .fft_size = ofdm_symbol_size,
+          .n_rb = frame_parms->N_RB_UL,
+          .bwp_start = srs_pdu->bwp_start,
+          .subcarrier_spacing = frame_parms->subcarrier_spacing,
+          .snr_db_x10 = (int16_t)(*snr * 10),
+      };
+
+      for (int ant_rx_ind = 0; ant_rx_ind < nb_antennas_rx; ant_rx_ind++) {
+        debug_capture_meta_t rx_meta = meta;
+        rx_meta.rx = ant_rx_ind;
+        rx_meta.rows = 1;
+        rx_meta.cols = ofdm_symbol_size * N_symb_SRS;
+        debug_capture_write(DEBUG_CAPTURE_SRS_RX,
+                            event_id,
+                            &rx_meta,
+                            srs_received_signal[ant_rx_ind]);
+        debug_capture_write(DEBUG_CAPTURE_SRS_NOISE,
+                            event_id,
+                            &rx_meta,
+                            srs_received_noise[ant_rx_ind]);
+      }
+
+      for (int p_ind = 0; p_ind < N_ap; p_ind++) {
+        debug_capture_meta_t ref_meta = meta;
+        ref_meta.port = p_ind;
+        ref_meta.rows = 1;
+        ref_meta.cols = ofdm_symbol_size * N_symb_SRS;
+        debug_capture_write(DEBUG_CAPTURE_SRS_REF,
+                            event_id,
+                            &ref_meta,
+                            srs_generated_signal[p_ind]);
+      }
+
+      for (int ant_rx_ind = 0; ant_rx_ind < nb_antennas_rx; ant_rx_ind++) {
+        for (int p_ind = 0; p_ind < N_ap; p_ind++) {
+          debug_capture_meta_t path_meta = meta;
+          path_meta.rx = ant_rx_ind;
+          path_meta.port = p_ind;
+          path_meta.rows = 1;
+          path_meta.cols = ofdm_symbol_size * N_symb_SRS;
+          debug_capture_write(DEBUG_CAPTURE_SRS_LS,
+                              event_id,
+                              &path_meta,
+                              srs_ls_estimated_channel[ant_rx_ind][p_ind]);
+          debug_capture_write(DEBUG_CAPTURE_SRS_INTERP,
+                              event_id,
+                              &path_meta,
+                              srs_estimated_channel_freq[ant_rx_ind][p_ind]);
+
+          path_meta.cols = NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size;
+          debug_capture_write(DEBUG_CAPTURE_SRS_TIME,
+                              event_id,
+                              &path_meta,
+                              srs_estimated_channel_time_shifted[ant_rx_ind][p_ind]);
+        }
+      }
+      debug_capture_end_srs_event();
+    }
 
     const uint16_t m_SRS_b = get_m_srs(srs_pdu->config_index, srs_pdu->bandwidth_index);
     for (int rb = 0; rb < m_SRS_b; rb++) {

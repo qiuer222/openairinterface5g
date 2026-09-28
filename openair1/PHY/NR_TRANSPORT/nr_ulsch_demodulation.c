@@ -9,6 +9,7 @@
 #include "PHY/NR_REFSIG/dmrs_nr.h"
 #include "PHY/NR_REFSIG/ptrs_nr.h"
 #include "PHY/NR_ESTIMATION/nr_ul_estimation.h"
+#include "PHY/NR_ESTIMATION/debug_capture.h"
 #include "PHY/defs_nr_common.h"
 #include "PHY/nr_phy_common/inc/nr_phy_common.h"
 #include "common/utils/nr/nr_common.h"
@@ -175,6 +176,7 @@ static int get_nb_re_pusch (NR_DL_FRAME_PARMS *frame_parms, const nfapi_nr_pusch
 }
 
 static void inner_rx(PHY_VARS_gNB *gNB,
+                     int frame,
                      int slot,
                      NR_DL_FRAME_PARMS *frame_parms,
                      NR_gNB_PUSCH *pusch_vars,
@@ -236,6 +238,60 @@ static void inner_rx(PHY_VARS_gNB *gNB,
 #endif
     }
   }
+
+  if (debug_capture_dmrs_active(frame, slot, rel15_ul->rnti)) {
+    const int nb_re_data = rel15_ul->rb_size * NR_NB_SC_PER_RB;
+    const int nb_dmrs_ch = (rel15_ul->dmrs_config_type == pusch_dmrs_type1 ? 6 : 8) * rel15_ul->rb_size;
+    const int cols = dmrs_symbol_flag ? nb_dmrs_ch : nb_re_data;
+    const debug_capture_kind_t channel_kind =
+        dmrs_symbol_flag ? DEBUG_CAPTURE_DMRS_LS : DEBUG_CAPTURE_DMRS_INTERP;
+
+    for (int aarx = 0; aarx < nb_rx_ant; aarx++) {
+      if (aarx == 0) {
+        const debug_capture_meta_t meta = {
+            .frame = frame,
+            .slot = slot,
+            .rnti = rel15_ul->rnti,
+            .symbol = symbol,
+            .rows = 1,
+            .cols = cols,
+            .fft_size = frame_parms->ofdm_symbol_size,
+            .n_rb = rel15_ul->rb_size,
+            .start_rb = rel15_ul->bwp_start + rel15_ul->rb_start,
+            .bwp_start = rel15_ul->bwp_start,
+            .subcarrier_spacing = rel15_ul->subcarrier_spacing,
+            .flags = dmrs_symbol_flag ? DEBUG_CAPTURE_FLAG_DMRS_SYMBOL : 0,
+        };
+        debug_capture_write(DEBUG_CAPTURE_DMRS_RX,
+                            debug_capture_current_event_id(),
+                            &meta,
+                            rxFext[aarx]);
+      }
+
+      for (int aatx = 0; aatx < nb_layer; aatx++) {
+        const debug_capture_meta_t meta = {
+            .frame = frame,
+            .slot = slot,
+            .rnti = rel15_ul->rnti,
+            .rx = aarx,
+            .layer = aatx,
+            .symbol = symbol,
+            .rows = 1,
+            .cols = cols,
+            .fft_size = frame_parms->ofdm_symbol_size,
+            .n_rb = rel15_ul->rb_size,
+            .start_rb = rel15_ul->bwp_start + rel15_ul->rb_start,
+            .bwp_start = rel15_ul->bwp_start,
+            .subcarrier_spacing = rel15_ul->subcarrier_spacing,
+            .flags = dmrs_symbol_flag ? DEBUG_CAPTURE_FLAG_DMRS_SYMBOL : 0,
+        };
+        debug_capture_write(channel_kind,
+                            debug_capture_current_event_id(),
+                            &meta,
+                            chFext[aatx][aarx]);
+      }
+    }
+  }
   start_meas(pusch_ch_comp);
   c16_t rho[nb_layer][nb_layer][buffer_length] __attribute__((aligned(64)));
   c16_t rxF_ch_maga[nb_layer][buffer_length] __attribute__((aligned(64)));
@@ -260,6 +316,31 @@ static void inner_rx(PHY_VARS_gNB *gNB,
                           symbol,
                           output_shift);
   stop_meas(pusch_ch_comp);
+
+  if (debug_capture_dmrs_active(frame, slot, rel15_ul->rnti)) {
+    const int valid_re = pusch_vars->ul_valid_re_per_slot[symbol];
+    for (int aatx = 0; aatx < nb_layer; aatx++) {
+      const debug_capture_meta_t meta = {
+          .frame = frame,
+          .slot = slot,
+          .rnti = rel15_ul->rnti,
+          .layer = aatx,
+          .symbol = symbol,
+          .rows = 1,
+          .cols = valid_re,
+          .fft_size = frame_parms->ofdm_symbol_size,
+          .n_rb = rel15_ul->rb_size,
+          .start_rb = rel15_ul->bwp_start + rel15_ul->rb_start,
+          .bwp_start = rel15_ul->bwp_start,
+          .subcarrier_spacing = rel15_ul->subcarrier_spacing,
+          .flags = dmrs_symbol_flag ? DEBUG_CAPTURE_FLAG_DMRS_SYMBOL : 0,
+      };
+      debug_capture_write(DEBUG_CAPTURE_DMRS_EQUALIZED,
+                          debug_capture_current_event_id(),
+                          &meta,
+                          &pusch_vars->rxdataF_comp[aatx][symbol * buffer_length]);
+    }
+  }
 
   if (nb_layer == 1 && rel15_ul->transform_precoding == transformPrecoder_enabled && rel15_ul->qam_mod_order <= 6) {
     if (rel15_ul->qam_mod_order > 2)
@@ -328,6 +409,7 @@ static void inner_rx(PHY_VARS_gNB *gNB,
 
 typedef struct puschSymbolProc_s {
   PHY_VARS_gNB *gNB;
+  uint32_t frame;
   NR_DL_FRAME_PARMS *frame_parms;
   const nfapi_nr_pusch_pdu_t *rel15_ul;
   NR_gNB_PUSCH *pusch_vars;
@@ -370,6 +452,7 @@ static void nr_pusch_symbol_processing(void *arg)
       llrss[l] = llrs[l];
 
     inner_rx(gNB,
+             rdata->frame,
              slot,
              frame_parms,
              pusch_vars,
@@ -505,6 +588,7 @@ int nr_rx_pusch_tp(PHY_VARS_gNB *gNB,
       for (int nl = 0; nl < rel15_ul->nrOfLayers; nl++) {
         uint32_t nvar_tmp = 0;
         nr_pusch_channel_estimation(gNB,
+                                    frame,
                                     slot,
                                     nl,
                                     get_dmrs_port(nl, rel15_ul->dmrs_ports),
@@ -727,6 +811,7 @@ int nr_rx_pusch_tp(PHY_VARS_gNB *gNB,
       ++sz_arr;
 
       rdata->gNB = gNB;
+      rdata->frame = frame;
       rdata->frame_parms = frame_parms;
       rdata->rel15_ul = rel15_ul;
       rdata->slot = slot;

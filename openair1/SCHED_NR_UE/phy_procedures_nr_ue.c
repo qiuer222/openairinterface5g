@@ -20,6 +20,7 @@
 #include "PHY/NR_UE_TRANSPORT/nr_transport_ue.h"
 #include "PHY/NR_UE_TRANSPORT/nr_transport_proto_ue.h"
 #include "PHY/NR_UE_TRANSPORT/ue_shm.h"
+#include "PHY/NR_ESTIMATION/debug_capture.h"
 #include "SCHED_NR_UE/phy_sch_processing_time.h"
 #include "PHY/NR_UE_ESTIMATION/nr_estimation.h"
 #include "executables/softmodem-common.h"
@@ -330,6 +331,13 @@ void ue_srs_procedures_nr(PHY_VARS_NR_UE *ue,
                                    frame_parms->nb_antennas_tx);
   DevAssert(generated); // if we can't generate despite the SRS config, there
                         // is a problem
+
+  debug_capture_configure(DEBUG_CAPTURE_ROLE_UE,
+                          get_nrUE_params()->record_csi_ch,
+                          -1,
+                          -1);
+  if (debug_capture_srs_event(proc->frame_tx, proc->nr_slot_tx, srs_config_pdu->rnti))
+    debug_capture_end_srs_event();
 }
 
 void phy_procedures_nrUE_TX(PHY_VARS_NR_UE *ue, const UE_nr_rxtx_proc_t *proc, nr_phy_data_tx_t *phy_data, c16_t **txp)

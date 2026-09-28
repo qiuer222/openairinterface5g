@@ -77,8 +77,8 @@ extern "C"
   "Set RF board timing_advance to compensate fix delay inside the RF board between Rx and Tx timestamps (RF board internal " \
   "issues)\n"
 
-#define CONFIG_HLP_RECORD_SRS_CH          "Record SRS channel: 1=single-slot overwrite, N>=2=burst (N slots then stop). File: /tmp/srs_channel.bin\n"
-#define CONFIG_HLP_RECORD_CSI_CH          "Record CSI-RS channel: 1=single-slot overwrite, N>=2=burst (N slots then stop). File: /tmp/csi_rs_channel.bin\n"
+#define CONFIG_HLP_RECORD_SRS_CH          "Record SRS channel: 1=single-slot overwrite, N>=2=record N SRS events (recommended: 5). File: /tmp/srs_channel.bin and /tmp/oai_debug_capture\n"
+#define CONFIG_HLP_RECORD_CSI_CH          "Record CSI-RS channel: 1=single-slot overwrite, N>=2=record CSI-RS during the N local SRS events (recommended: 5). File: /tmp/csi_rs_channel.bin and /tmp/oai_debug_capture\n"
 
 /*-----------------------------------------------------------------------------------------------------------------------------------------------------*/
 /*                                            command line parameters common to eNodeB and UE                                                          */

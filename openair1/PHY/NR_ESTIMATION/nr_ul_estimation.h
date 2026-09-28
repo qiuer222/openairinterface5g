@@ -25,6 +25,7 @@
 */
 
 int nr_pusch_channel_estimation(PHY_VARS_gNB *gNB,
+                                uint32_t frame,
                                 unsigned char Ns,
                                 int nl,
                                 unsigned short p,

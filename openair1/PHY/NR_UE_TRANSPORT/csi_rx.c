@@ -19,6 +19,7 @@
 #include "executables/nr-softmodem-common.h"
 #include "executables/nr-uesoftmodem.h"
 #include "nr_transport_proto_ue.h"
+#include "PHY/NR_ESTIMATION/debug_capture.h"
 #include "PHY/NR_REFSIG/nr_refsig.h"
 #include "ue_shm.h"
 #include "common/utils/nr/nr_common.h"
@@ -164,6 +165,11 @@ static int nr_get_csi_rs_signal(const PHY_VARS_NR_UE *ue,
   const NR_DL_FRAME_PARMS *fp = &ue->frame_parms;
   uint16_t meas_count = 0;
   uint32_t rsrp_sum = 0;
+
+  if (debug_capture_is_active())
+    memset(csi_rs_received_signal,
+           0,
+           fp->nb_antennas_rx * fp->samples_per_slot_wCP * sizeof(c16_t));
 
   for (int ant_rx = 0; ant_rx < fp->nb_antennas_rx; ant_rx++) {
 
@@ -1082,6 +1088,60 @@ void nr_ue_csi_rs_procedures(PHY_VARS_NR_UE *ue,
                                 &log2_maxh,
                                 &noise_power);
    }
+
+  if (debug_capture_is_active() && debug_capture_current_event_id()) {
+    const uint32_t event_id = debug_capture_current_event_id();
+    debug_capture_meta_t meta = {
+        .frame = proc->frame_rx,
+        .slot = proc->nr_slot_rx,
+        .rnti = 0,
+        .rows = 1,
+        .fft_size = frame_parms->ofdm_symbol_size,
+        .n_rb = csirs_config_pdu->nr_of_rbs,
+        .start_rb = csirs_config_pdu->start_rb,
+        .bwp_start = 0,
+        .subcarrier_spacing = csirs_config_pdu->subcarrier_spacing,
+    };
+
+    for (int ant_rx = 0; ant_rx < frame_parms->nb_antennas_rx; ant_rx++) {
+      debug_capture_meta_t rx_meta = meta;
+      rx_meta.rx = ant_rx;
+      rx_meta.cols = frame_parms->samples_per_slot_wCP;
+      debug_capture_write(DEBUG_CAPTURE_CSIRS_RX,
+                          event_id,
+                          &rx_meta,
+                          csi_rs_received_signal[ant_rx]);
+    }
+
+    for (uint16_t port = 0; port < mapping_parms.ports; port++) {
+      debug_capture_meta_t ref_meta = meta;
+      ref_meta.port = port;
+      ref_meta.cols = frame_parms->samples_per_slot_wCP;
+      debug_capture_write(DEBUG_CAPTURE_CSIRS_REF,
+                          event_id,
+                          &ref_meta,
+                          csi_info->csi_rs_generated_signal[port]);
+    }
+
+    if (csirs_config_pdu->measurement_bitmap != 1) {
+      for (int ant_rx = 0; ant_rx < frame_parms->nb_antennas_rx; ant_rx++) {
+        for (uint16_t port = 0; port < mapping_parms.ports; port++) {
+          debug_capture_meta_t path_meta = meta;
+          path_meta.rx = ant_rx;
+          path_meta.port = port;
+          path_meta.cols = frame_parms->ofdm_symbol_size;
+          debug_capture_write(DEBUG_CAPTURE_CSIRS_LS,
+                              event_id,
+                              &path_meta,
+                              csi_rs_ls_estimated_channel[ant_rx][port]);
+          debug_capture_write(DEBUG_CAPTURE_CSIRS_INTERP,
+                              event_id,
+                              &path_meta,
+                              csi_rs_estimated_channel_freq[ant_rx][port]);
+        }
+      }
+    }
+  }
   /* Write CSI-RS frequency-domain channel estimate to shared memory */
   ue_shm_write_csi_rs(proc->frame_rx, proc->nr_slot_rx,
                       frame_parms->nb_antennas_rx,
