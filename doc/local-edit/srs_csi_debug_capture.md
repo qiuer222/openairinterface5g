@@ -104,15 +104,9 @@ The analyzer writes:
 summary.json
 events.csv
 figures/*_channel.png
-figures/*_head.png
 figures/*_srs_time.png
 figures/*_dmrs_constellation.png
 ```
-
-`*_head.png` zooms the leading 10 percent of each captured frequency-domain
-vector by default. This is an additional view; the complete vectors remain in
-the full-channel plot and in `capture.bin`. Use `--focus-fraction` to change
-the zoom ratio.
 
 Run the parser tests with:
 

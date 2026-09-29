@@ -10,7 +10,6 @@ from gui.analyze_srs_capture import (
     CAPTURE_MAGIC,
     CAPTURE_VERSION,
     HEADER,
-    head_metrics,
     read_capture,
 )
 
@@ -74,15 +73,6 @@ class AnalyzeSrsCaptureTest(unittest.TestCase):
                 fp.truncate(HEADER.size + 7)
             with self.assertRaises(ValueError):
                 read_capture(tmpdir)
-
-    def test_head_metrics(self):
-        values = np.ones(20, dtype=np.complex128)
-        values[:2] = 100
-        metrics = head_metrics(values, 0.1)
-        self.assertEqual(metrics["head_subcarriers"], 2)
-        self.assertGreater(metrics["head_to_middle_db"], 30)
-        self.assertAlmostEqual(metrics["phase_step_max_rad"], 0.0)
-
 
 if __name__ == "__main__":
     unittest.main()

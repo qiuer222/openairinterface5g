@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import os
 import struct
 import sys
@@ -193,33 +192,6 @@ def db(values: np.ndarray, floor: float = 1e-12) -> np.ndarray:
     return 20.0 * np.log10(np.maximum(np.abs(values), floor))
 
 
-def head_metrics(values: np.ndarray, fraction: float) -> Dict[str, float]:
-    flat = np.asarray(values).reshape(-1)
-    if flat.size == 0:
-        return {}
-
-    head_count = max(1, min(flat.size, int(math.ceil(flat.size * fraction))))
-    power = np.abs(flat) ** 2
-    head_power = float(np.mean(power[:head_count]))
-    middle_power = float(np.mean(power[head_count:])) if head_count < flat.size else 0.0
-    adjacent = np.angle(flat[1:] * np.conj(flat[:-1])) if flat.size > 1 else np.asarray([])
-    phase = np.unwrap(np.angle(flat))
-    slope = float(np.polyfit(np.arange(flat.size), phase, 1)[0]) if flat.size > 1 else 0.0
-    return {
-        "head_subcarriers": head_count,
-        "head_to_middle_db": (
-            10.0 * math.log10(max(head_power, 1e-12) / max(middle_power, 1e-12))
-            if middle_power > 0
-            else float("nan")
-        ),
-        "phase_step_p95_rad": (
-            float(np.percentile(np.abs(adjacent), 95)) if adjacent.size else 0.0
-        ),
-        "phase_step_max_rad": float(np.max(np.abs(adjacent))) if adjacent.size else 0.0,
-        "phase_slope_rad_per_sample": slope,
-    }
-
-
 def grouped(records: Iterable[CaptureRecord]) -> Dict[Tuple[str, int], List[CaptureRecord]]:
     result: Dict[Tuple[str, int], List[CaptureRecord]] = {}
     for record in records:
@@ -245,8 +217,7 @@ def path_keys(records: Sequence[CaptureRecord], kinds: Sequence[int]) -> List[Tu
 
 def plot_frequency_event(records: Sequence[CaptureRecord],
                          event: int,
-                         output_dir: str,
-                         focus_fraction: float) -> None:
+                         output_dir: str) -> None:
     plt = load_pyplot()
     if not records:
         return
@@ -276,9 +247,7 @@ def plot_frequency_event(records: Sequence[CaptureRecord],
             axes[row, 0].plot(x, db(values), label=label, linewidth=1.0)
             axes[row, 1].plot(x, np.unwrap(np.angle(values)), label=label, linewidth=1.0)
 
-        head_count = max(1, int(math.ceil(candidates[0][0].data.size * focus_fraction)))
         for col in range(2):
-            axes[row, col].axvline(head_count, color="tab:red", linestyle="--", linewidth=0.8)
             axes[row, col].grid(True, alpha=0.25)
             axes[row, col].legend(loc="best", fontsize=8)
             axes[row, col].set_xlabel(x_label)
@@ -288,37 +257,6 @@ def plot_frequency_event(records: Sequence[CaptureRecord],
     fig.suptitle(f"{role} event {event}: channel magnitude and phase")
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     fig.savefig(os.path.join(output_dir, f"{role}_event_{event}_channel.png"), dpi=140)
-    plt.close(fig)
-
-    fig, axes = plt.subplots(len(paths), 2, figsize=(13, 2.8 * len(paths)), squeeze=False)
-    for row, (rx, port) in enumerate(paths):
-        candidates = [
-            (find_record(records, 4, rx, port), "SRS LS"),
-            (find_record(records, 5, rx, port), "SRS interp"),
-            (find_record(records, 14, rx, port), "CSI-RS LS"),
-            (find_record(records, 15, rx, port), "CSI-RS interp"),
-        ]
-        candidates = [(record, label) for record, label in candidates if record is not None]
-        if not candidates:
-            continue
-        head_count = max(1, int(math.ceil(candidates[0][0].data.size * focus_fraction)))
-        for record, label in candidates:
-            values = record.data.reshape(-1)[:head_count]
-            x = np.arange(values.size)
-            axes[row, 0].plot(x, db(values), label=label, linewidth=1.0)
-            axes[row, 1].plot(x, np.unwrap(np.angle(values)), label=label, linewidth=1.0)
-        for col in range(2):
-            axes[row, col].grid(True, alpha=0.25)
-            axes[row, col].legend(loc="best", fontsize=8)
-            axes[row, col].set_xlabel("head sample index")
-        axes[row, 0].set_ylabel(f"rx{rx} port{port}\ndB")
-        axes[row, 1].set_ylabel("unwrapped phase (rad)")
-
-    fig.suptitle(
-        f"{role} event {event}: first {focus_fraction * 100:g}% subcarriers"
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.98))
-    fig.savefig(os.path.join(output_dir, f"{role}_event_{event}_head.png"), dpi=140)
     plt.close(fig)
 
 
@@ -373,14 +311,12 @@ def plot_dmrs(records: Sequence[CaptureRecord], event: int, output_dir: str) -> 
     plt.close(fig)
 
 
-def write_reports(records: Sequence[CaptureRecord], manifests: Sequence[Dict], output_dir: str,
-                  focus_fraction: float) -> None:
+def write_reports(records: Sequence[CaptureRecord], manifests: Sequence[Dict], output_dir: str) -> None:
     metrics_rows = []
     event_summaries = []
     for (role, event), event_records in sorted(grouped(records).items()):
         event_metrics = []
         for record in event_records:
-            metric = head_metrics(record.data, focus_fraction)
             row = {
                 "role": role,
                 "event_id": event,
@@ -394,7 +330,6 @@ def write_reports(records: Sequence[CaptureRecord], manifests: Sequence[Dict], o
                 "symbol": record.symbol,
                 "samples": record.data.size,
                 "snr_db": record.snr_db,
-                **metric,
             }
             metrics_rows.append(row)
             if record.kind in (4, 5, 14, 15):
@@ -412,7 +347,6 @@ def write_reports(records: Sequence[CaptureRecord], manifests: Sequence[Dict], o
             })
 
     summary = {
-        "focus_fraction": focus_fraction,
         "manifests": list(manifests),
         "record_count": len(records),
         "events": event_summaries,
@@ -422,8 +356,7 @@ def write_reports(records: Sequence[CaptureRecord], manifests: Sequence[Dict], o
 
     fieldnames = [
         "role", "event_id", "kind", "frame", "slot", "rnti", "rx", "port", "layer",
-        "symbol", "samples", "snr_db", "head_subcarriers", "head_to_middle_db",
-        "phase_step_p95_rad", "phase_step_max_rad", "phase_slope_rad_per_sample",
+        "symbol", "samples", "snr_db",
     ]
     with open(os.path.join(output_dir, "events.csv"), "w", newline="", encoding="utf-8") as fp:
         writer = csv.DictWriter(fp, fieldnames=fieldnames)
@@ -447,11 +380,11 @@ def analyze(args: argparse.Namespace) -> None:
     os.makedirs(figures_dir, exist_ok=True)
 
     for (role, event), event_records in sorted(grouped(records).items()):
-        plot_frequency_event(event_records, event, figures_dir, args.focus_fraction)
+        plot_frequency_event(event_records, event, figures_dir)
         plot_srs_time(event_records, event, figures_dir)
         plot_dmrs(event_records, event, figures_dir)
 
-    write_reports(records, manifests, output_dir, args.focus_fraction)
+    write_reports(records, manifests, output_dir)
     print(f"analyzed {len(records)} records from {len(manifests)} capture(s)")
     print(f"reports: {output_dir}")
     print(f"figures: {figures_dir}")
@@ -464,19 +397,11 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("input", help="run directory, role directory, or capture.bin")
     parser.add_argument("--ue-dir", help="separate UE capture directory")
     parser.add_argument("--output-dir", help="analysis output directory")
-    parser.add_argument(
-        "--focus-fraction",
-        type=float,
-        default=0.1,
-        help="fraction of the leading samples used for extra metrics/zoom plots (default: 0.1)",
-    )
     return parser.parse_args(argv)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
-    if not 0 < args.focus_fraction <= 1:
-        raise SystemExit("--focus-fraction must be in (0, 1]")
     try:
         analyze(args)
     except (OSError, ValueError) as exc:
