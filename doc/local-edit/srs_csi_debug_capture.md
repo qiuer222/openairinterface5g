@@ -108,6 +108,35 @@ figures/*_srs_time.png
 figures/*_dmrs_constellation.png
 ```
 
+In `*_channel.png`, the horizontal axis is the stored FFT bin index, also
+referred to as the subcarrier index. It is not a time sample index. LS records
+are drawn as scatter points; interpolated records are drawn as lines. The SRS
+and CSI-RS frequency-domain records are split per OFDM symbol, so every plotted
+curve covers `0 .. fft_size-1`.
+
+In `*_srs_time.png`, the horizontal axis is the oversampled time-domain channel
+tap index. DMRS records are indexed within the extracted PUSCH allocation, not
+on the full FFT grid.
+
+## Inspect selected subcarriers
+
+Use `gui/inspect_srs_capture.py` to print individual stored complex values:
+
+```bash
+.venv/bin/python gui/inspect_srs_capture.py \
+  /tmp/oai_debug_capture/test1 \
+  --kind srs_ls \
+  --event 1 \
+  --rx 0 \
+  --port 0 \
+  --index 0,10,20-24
+```
+
+Use `--list-records` to list matching record metadata and `--json` for
+machine-readable output. For frequency-domain records, `--index` is the FFT
+bin/subcarrier index stored in `capture.bin`. For `srs_time`, it is the
+time-domain tap index.
+
 Run the parser tests with:
 
 ```bash

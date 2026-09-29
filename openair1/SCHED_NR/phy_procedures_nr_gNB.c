@@ -802,29 +802,35 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
       };
 
       for (int ant_rx_ind = 0; ant_rx_ind < nb_antennas_rx; ant_rx_ind++) {
-        debug_capture_meta_t rx_meta = meta;
-        rx_meta.rx = ant_rx_ind;
-        rx_meta.rows = 1;
-        rx_meta.cols = ofdm_symbol_size * N_symb_SRS;
-        debug_capture_write(DEBUG_CAPTURE_SRS_RX,
-                            event_id,
-                            &rx_meta,
-                            srs_received_signal[ant_rx_ind]);
-        debug_capture_write(DEBUG_CAPTURE_SRS_NOISE,
-                            event_id,
-                            &rx_meta,
-                            srs_received_noise[ant_rx_ind]);
+        for (int symbol = 0; symbol < N_symb_SRS; symbol++) {
+          debug_capture_meta_t rx_meta = meta;
+          rx_meta.rx = ant_rx_ind;
+          rx_meta.symbol = symbol;
+          rx_meta.rows = 1;
+          rx_meta.cols = ofdm_symbol_size;
+          debug_capture_write(DEBUG_CAPTURE_SRS_RX,
+                              event_id,
+                              &rx_meta,
+                              &srs_received_signal[ant_rx_ind][symbol * ofdm_symbol_size]);
+          debug_capture_write(DEBUG_CAPTURE_SRS_NOISE,
+                              event_id,
+                              &rx_meta,
+                              &srs_received_noise[ant_rx_ind][symbol * ofdm_symbol_size]);
+        }
       }
 
       for (int p_ind = 0; p_ind < N_ap; p_ind++) {
-        debug_capture_meta_t ref_meta = meta;
-        ref_meta.port = p_ind;
-        ref_meta.rows = 1;
-        ref_meta.cols = ofdm_symbol_size * N_symb_SRS;
-        debug_capture_write(DEBUG_CAPTURE_SRS_REF,
-                            event_id,
-                            &ref_meta,
-                            srs_generated_signal[p_ind]);
+        for (int symbol = 0; symbol < N_symb_SRS; symbol++) {
+          debug_capture_meta_t ref_meta = meta;
+          ref_meta.port = p_ind;
+          ref_meta.symbol = symbol;
+          ref_meta.rows = 1;
+          ref_meta.cols = ofdm_symbol_size;
+          debug_capture_write(DEBUG_CAPTURE_SRS_REF,
+                              event_id,
+                              &ref_meta,
+                              &srs_generated_signal[p_ind][symbol * ofdm_symbol_size]);
+        }
       }
 
       for (int ant_rx_ind = 0; ant_rx_ind < nb_antennas_rx; ant_rx_ind++) {
@@ -832,16 +838,19 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
           debug_capture_meta_t path_meta = meta;
           path_meta.rx = ant_rx_ind;
           path_meta.port = p_ind;
-          path_meta.rows = 1;
-          path_meta.cols = ofdm_symbol_size * N_symb_SRS;
-          debug_capture_write(DEBUG_CAPTURE_SRS_LS,
-                              event_id,
-                              &path_meta,
-                              srs_ls_estimated_channel[ant_rx_ind][p_ind]);
-          debug_capture_write(DEBUG_CAPTURE_SRS_INTERP,
-                              event_id,
-                              &path_meta,
-                              srs_estimated_channel_freq[ant_rx_ind][p_ind]);
+          for (int symbol = 0; symbol < N_symb_SRS; symbol++) {
+            path_meta.symbol = symbol;
+            path_meta.rows = 1;
+            path_meta.cols = ofdm_symbol_size;
+            debug_capture_write(DEBUG_CAPTURE_SRS_LS,
+                                event_id,
+                                &path_meta,
+                                &srs_ls_estimated_channel[ant_rx_ind][p_ind][symbol * ofdm_symbol_size]);
+            debug_capture_write(DEBUG_CAPTURE_SRS_INTERP,
+                                event_id,
+                                &path_meta,
+                                &srs_estimated_channel_freq[ant_rx_ind][p_ind][symbol * ofdm_symbol_size]);
+          }
 
           path_meta.cols = NR_SRS_IDFT_OVERSAMP_FACTOR * ofdm_symbol_size;
           debug_capture_write(DEBUG_CAPTURE_SRS_TIME,

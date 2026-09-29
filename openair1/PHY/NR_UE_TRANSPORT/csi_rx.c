@@ -1104,23 +1104,29 @@ void nr_ue_csi_rs_procedures(PHY_VARS_NR_UE *ue,
     };
 
     for (int ant_rx = 0; ant_rx < frame_parms->nb_antennas_rx; ant_rx++) {
-      debug_capture_meta_t rx_meta = meta;
-      rx_meta.rx = ant_rx;
-      rx_meta.cols = frame_parms->samples_per_slot_wCP;
-      debug_capture_write(DEBUG_CAPTURE_CSIRS_RX,
-                          event_id,
-                          &rx_meta,
-                          csi_rs_received_signal[ant_rx]);
+      for (int symbol = 0; symbol < frame_parms->symbols_per_slot; symbol++) {
+        debug_capture_meta_t rx_meta = meta;
+        rx_meta.rx = ant_rx;
+        rx_meta.symbol = symbol;
+        rx_meta.cols = frame_parms->ofdm_symbol_size;
+        debug_capture_write(DEBUG_CAPTURE_CSIRS_RX,
+                            event_id,
+                            &rx_meta,
+                            &csi_rs_received_signal[ant_rx][symbol * frame_parms->ofdm_symbol_size]);
+      }
     }
 
     for (uint16_t port = 0; port < mapping_parms.ports; port++) {
-      debug_capture_meta_t ref_meta = meta;
-      ref_meta.port = port;
-      ref_meta.cols = frame_parms->samples_per_slot_wCP;
-      debug_capture_write(DEBUG_CAPTURE_CSIRS_REF,
-                          event_id,
-                          &ref_meta,
-                          csi_info->csi_rs_generated_signal[port]);
+      for (int symbol = 0; symbol < frame_parms->symbols_per_slot; symbol++) {
+        debug_capture_meta_t ref_meta = meta;
+        ref_meta.port = port;
+        ref_meta.symbol = symbol;
+        ref_meta.cols = frame_parms->ofdm_symbol_size;
+        debug_capture_write(DEBUG_CAPTURE_CSIRS_REF,
+                            event_id,
+                            &ref_meta,
+                            &csi_info->csi_rs_generated_signal[port][symbol * frame_parms->ofdm_symbol_size]);
+      }
     }
 
     if (csirs_config_pdu->measurement_bitmap != 1) {

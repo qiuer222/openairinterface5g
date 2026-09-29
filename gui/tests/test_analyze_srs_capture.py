@@ -12,6 +12,7 @@ from gui.analyze_srs_capture import (
     HEADER,
     read_capture,
 )
+from gui.inspect_srs_capture import parse_index_spec
 
 
 class AnalyzeSrsCaptureTest(unittest.TestCase):
@@ -73,6 +74,11 @@ class AnalyzeSrsCaptureTest(unittest.TestCase):
                 fp.truncate(HEADER.size + 7)
             with self.assertRaises(ValueError):
                 read_capture(tmpdir)
+
+    def test_parse_index_spec(self):
+        self.assertEqual(parse_index_spec("0,3,5-7"), [0, 3, 5, 6, 7])
+        with self.assertRaises(ValueError):
+            parse_index_spec("7-5")
 
 if __name__ == "__main__":
     unittest.main()

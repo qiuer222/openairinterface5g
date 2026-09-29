@@ -55,6 +55,8 @@ class CaptureRecord:
     port: int
     layer: int
     symbol: int
+    rows: int
+    cols: int
     fft_size: int
     n_rb: int
     start_rb: int
@@ -153,6 +155,8 @@ def read_capture(path: str) -> Tuple[Dict, List[CaptureRecord]]:
                     port=port,
                     layer=layer,
                     symbol=symbol,
+                    rows=rows,
+                    cols=cols,
                     fft_size=fft_size,
                     n_rb=n_rb,
                     start_rb=start_rb,
@@ -215,6 +219,17 @@ def path_keys(records: Sequence[CaptureRecord], kinds: Sequence[int]) -> List[Tu
     return sorted({(record.rx, record.port) for record in records if record.kind in kinds})
 
 
+def split_frequency_record(record: CaptureRecord) -> Iterable[Tuple[int, np.ndarray]]:
+    flat = record.data.reshape(-1)
+    if record.fft_size > 0 and record.cols > record.fft_size and record.cols % record.fft_size == 0:
+        symbols = record.cols // record.fft_size
+        for symbol in range(symbols):
+            start = symbol * record.fft_size
+            yield symbol, flat[start:start + record.fft_size]
+    else:
+        yield record.symbol, flat
+
+
 def plot_frequency_event(records: Sequence[CaptureRecord],
                          event: int,
                          output_dir: str) -> None:
@@ -229,32 +244,47 @@ def plot_frequency_event(records: Sequence[CaptureRecord],
     max_paths = 8
     paths = paths[:max_paths]
     fig, axes = plt.subplots(len(paths), 2, figsize=(13, 2.8 * len(paths)), squeeze=False)
-    x_label = "sample index"
     for row, (rx, port) in enumerate(paths):
-        candidates = [
-            (find_record(records, 4, rx, port), "SRS LS"),
-            (find_record(records, 5, rx, port), "SRS interp"),
-            (find_record(records, 14, rx, port), "CSI-RS LS"),
-            (find_record(records, 15, rx, port), "CSI-RS interp"),
-        ]
-        candidates = [(record, label) for record, label in candidates if record is not None]
+        candidates = []
+        for kind, label in (
+            (4, "SRS LS"),
+            (5, "SRS interp"),
+            (14, "CSI-RS LS"),
+            (15, "CSI-RS interp"),
+        ):
+            record = find_record(records, kind, rx, port)
+            if record is not None:
+                candidates.append((record, label))
+
         if not candidates:
             continue
 
         for record, label in candidates:
-            values = record.data.reshape(-1)
-            x = np.arange(values.size)
-            axes[row, 0].plot(x, db(values), label=label, linewidth=1.0)
-            axes[row, 1].plot(x, np.unwrap(np.angle(values)), label=label, linewidth=1.0)
+            for symbol, values in split_frequency_record(record):
+                suffix = f" sym{symbol}" if record.cols > record.fft_size > 0 else ""
+                x = np.arange(values.size)
+                if record.kind in (4, 14):
+                    valid = np.abs(values) > 0
+                    axes[row, 0].scatter(x[valid], db(values[valid]), s=8,
+                                         label=f"{label}{suffix}")
+                    axes[row, 1].scatter(x[valid], np.angle(values[valid]), s=8,
+                                         label=f"{label}{suffix}")
+                else:
+                    axes[row, 0].plot(x, db(values), label=f"{label}{suffix}", linewidth=1.0)
+                    axes[row, 1].plot(x, np.unwrap(np.angle(values)),
+                                      label=f"{label}{suffix}", linewidth=1.0)
 
         for col in range(2):
             axes[row, col].grid(True, alpha=0.25)
             axes[row, col].legend(loc="best", fontsize=8)
-            axes[row, col].set_xlabel(x_label)
+            axes[row, col].set_xlabel("FFT bin / subcarrier index")
         axes[row, 0].set_ylabel(f"rx{rx} port{port}\ndB")
-        axes[row, 1].set_ylabel("unwrapped phase (rad)")
+        axes[row, 1].set_ylabel("phase (rad)")
 
-    fig.suptitle(f"{role} event {event}: channel magnitude and phase")
+    fig.suptitle(
+        f"{role} event {event}: LS scatter and interpolated channel "
+        "(x = FFT bin / subcarrier index)"
+    )
     fig.tight_layout(rect=(0, 0, 1, 0.98))
     fig.savefig(os.path.join(output_dir, f"{role}_event_{event}_channel.png"), dpi=140)
     plt.close(fig)
@@ -270,7 +300,7 @@ def plot_srs_time(records: Sequence[CaptureRecord], event: int, output_dir: str)
         values = record.data.reshape(-1)
         ax.plot(np.arange(values.size), db(values),
                 label=f"rx{record.rx} port{record.port}", linewidth=1.0)
-    ax.set_xlabel("time-domain tap index")
+    ax.set_xlabel("time-domain tap index (oversampled SRS IDFT output)")
     ax.set_ylabel("dB")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="best", fontsize=8)
