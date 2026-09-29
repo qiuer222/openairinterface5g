@@ -42,6 +42,28 @@ typedef struct {
 
 static debug_capture_state_t capture = {.mutex = PTHREAD_MUTEX_INITIALIZER};
 
+static const char *kind_name(debug_capture_kind_t kind)
+{
+  switch (kind) {
+    case DEBUG_CAPTURE_SRS_RX: return "srs_rx";
+    case DEBUG_CAPTURE_SRS_REF: return "srs_ref";
+    case DEBUG_CAPTURE_SRS_NOISE: return "srs_noise";
+    case DEBUG_CAPTURE_SRS_LS: return "srs_ls";
+    case DEBUG_CAPTURE_SRS_INTERP: return "srs_interp";
+    case DEBUG_CAPTURE_SRS_TIME: return "srs_time";
+    case DEBUG_CAPTURE_DMRS_REF: return "dmrs_ref";
+    case DEBUG_CAPTURE_DMRS_RX: return "dmrs_rx";
+    case DEBUG_CAPTURE_DMRS_LS: return "dmrs_ls";
+    case DEBUG_CAPTURE_DMRS_INTERP: return "dmrs_interp";
+    case DEBUG_CAPTURE_DMRS_EQUALIZED: return "dmrs_equalized";
+    case DEBUG_CAPTURE_CSIRS_RX: return "csirs_rx";
+    case DEBUG_CAPTURE_CSIRS_REF: return "csirs_ref";
+    case DEBUG_CAPTURE_CSIRS_LS: return "csirs_ls";
+    case DEBUG_CAPTURE_CSIRS_INTERP: return "csirs_interp";
+    default: return "unknown";
+  }
+}
+
 static bool mkdir_if_needed(const char *path)
 {
   if (mkdir(path, 0775) == 0)
@@ -138,8 +160,17 @@ bool debug_capture_configure(debug_capture_role_t role, int max_srs_events, int 
     capture.configured = false;
     return false;
   }
+  setvbuf(capture.capture, NULL, _IONBF, 0);
 
   capture.active = true;
+  fprintf(stderr,
+          "[DEBUG_CAPTURE] initialized role=%s events=%d start=%d.%d output=%s\n",
+          role_name,
+          max_srs_events,
+          start_sfn,
+          start_slot,
+          capture.directory);
+  fflush(stderr);
   LOG_I(PHY,
         "debug_capture: role=%s events=%d start=%d.%d output=%s\n",
         role_name,
@@ -168,12 +199,38 @@ static bool start_condition_met(uint32_t frame, uint32_t slot)
 
 bool debug_capture_srs_event(uint32_t frame, uint32_t slot, uint16_t rnti)
 {
-  if (!debug_capture_is_active())
+  if (!capture.configured)
     return false;
-  if (!start_condition_met(frame, slot))
+  if (!capture.active) {
+    fprintf(stderr,
+            "[DEBUG_CAPTURE] SRS %u.%u rnti=0x%04x ignored: capture inactive/closed\n",
+            frame,
+            slot,
+            rnti);
+    fflush(stderr);
     return false;
-  if (capture.event_count >= capture.max_events)
+  }
+  if (!start_condition_met(frame, slot)) {
+    fprintf(stderr,
+            "[DEBUG_CAPTURE] SRS %u.%u rnti=0x%04x waiting for start %d.%d\n",
+            frame,
+            slot,
+            rnti,
+            capture.start_sfn,
+            capture.start_slot);
+    fflush(stderr);
     return false;
+  }
+  if (capture.event_count >= capture.max_events) {
+    fprintf(stderr,
+            "[DEBUG_CAPTURE] SRS %u.%u rnti=0x%04x ignored: event limit %d reached\n",
+            frame,
+            slot,
+            rnti,
+            capture.max_events);
+    fflush(stderr);
+    return false;
+  }
 
   capture.event_count++;
   capture.event_id = (uint32_t)capture.event_count;
@@ -184,6 +241,15 @@ bool debug_capture_srs_event(uint32_t frame, uint32_t slot, uint16_t rnti)
   }
   capture.last_frame = frame;
   capture.last_slot = slot;
+  fprintf(stderr,
+          "[DEBUG_CAPTURE] SRS %u.%u rnti=0x%04x accepted event=%d/%d event_id=%u\n",
+          frame,
+          slot,
+          rnti,
+          capture.event_count,
+          capture.max_events,
+          capture.event_id);
+  fflush(stderr);
   return true;
 }
 
@@ -253,7 +319,24 @@ void debug_capture_write(debug_capture_kind_t kind,
   pthread_mutex_lock(&capture.mutex);
   fwrite(&hdr, sizeof(hdr), 1, capture.capture);
   fwrite(data, sizeof(c16_t), (size_t)samples, capture.capture);
+  fflush(capture.capture);
   pthread_mutex_unlock(&capture.mutex);
+
+  fprintf(stderr,
+          "[DEBUG_CAPTURE] write kind=%s event=%u frame_slot=%u.%u shape=%ux%u "
+          "rx=%u port=%u layer=%u symbol=%u bytes=%u\n",
+          kind_name(kind),
+          event_id,
+          meta->frame,
+          meta->slot,
+          meta->rows,
+          meta->cols,
+          meta->rx,
+          meta->port,
+          meta->layer,
+          meta->symbol,
+          hdr.payload_bytes);
+  fflush(stderr);
 }
 
 void debug_capture_close(void)
@@ -304,6 +387,14 @@ void debug_capture_close(void)
           capture.max_events,
           bytes,
           capture.capture_path);
+    fprintf(stderr,
+            "[DEBUG_CAPTURE] closed events=%d/%d bytes=%ld capture=%s manifest=%s\n",
+            capture.event_count,
+            capture.max_events,
+            bytes,
+            capture.capture_path,
+            capture.manifest_path);
+    fflush(stderr);
   }
   pthread_mutex_unlock(&capture.mutex);
 

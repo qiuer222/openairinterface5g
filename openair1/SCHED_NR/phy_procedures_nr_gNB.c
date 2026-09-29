@@ -885,6 +885,14 @@ nr_srs_info_t nr_srs_rx_procedures(PHY_VARS_gNB *gNB,
       T_INT(frame_rx),
       T_INT(slot_rx),
       T_BUFFER(timing_advance_offset_nsec, nb_antennas_rx * sizeof(int16_t)));
+  } else if (debug_capture_is_active()) {
+    fprintf(stderr,
+            "[DEBUG_CAPTURE] SRS %d.%d rnti=0x%04x not captured: srs_est=%d\n",
+            frame_rx,
+            slot_rx,
+            srs_pdu->rnti,
+            *srs_est);
+    fflush(stderr);
   }
   return nr_srs_info;
 }

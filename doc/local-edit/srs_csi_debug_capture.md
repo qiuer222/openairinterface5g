@@ -32,6 +32,19 @@ The normal OAI behavior is unchanged when the record options are zero. Passing
 `1` keeps the old single-slot dump behavior. Passing `N >= 2` enables the new
 event capture and records N SRS events.
 
+The debug capture prints unconditional `[DEBUG_CAPTURE]` lines to stderr:
+
+- `initialized` when the output directory and `capture.bin` are created;
+- `waiting for start` while the configured start SFN/slot has not been reached;
+- `accepted event=<n>/<N>` for every captured SRS event;
+- `write kind=...` for every binary record written;
+- `closed events=... bytes=...` after the requested SRS count is reached.
+
+`capture.bin` is unbuffered and is flushed after every record, so a non-empty
+file should grow while the test is running. A zero-byte file means that no SRS
+event was accepted yet. Check the `[DEBUG_CAPTURE]` output for either a future
+start SFN/slot or an SRS estimation failure.
+
 ## Recorded data
 
 The gNB records:
