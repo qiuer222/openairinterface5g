@@ -3,26 +3,32 @@
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from gui.analysis.capacity.shannon import shannon_capacity
-from gui.analysis.capacity.svd import svd_capacities_from_eigenvalues
-from gui.analysis.capacity.zf_mmse import (
-    aggregate_zf_mmse_from_svd,
-    zf_mmse_subcarrier_from_svd,
+from gui.analysis.capacity.shannon import (
+    shannon_capacity,
+    shannon_stream_capacities_from_eigenvalue_matrix,
 )
+from gui.analysis.capacity.svd import svd_capacities_from_eigenvalues
 from gui.analysis.csi_parser import load_channel, valid_subcarrier_indices
 from gui.analysis.data_loader import (
     MeasurementSet,
     discover_measurement_sets,
     load_measurement_frame,
 )
-from gui.analysis.main import aggregate_position_level
+from gui.analysis.main import (
+    _load_channel_map,
+    _match_channel,
+    aggregate_position_level,
+    process_measurements,
+)
 from gui.analysis.normalization import raw_channel_power
+from gui.analysis.tests.generate_mock_ul_3rounds import generate
 
 
 def _diagonal_channel() -> np.ndarray:
@@ -87,22 +93,18 @@ class AnalysisFrameworkTests(unittest.TestCase):
             )
         )
 
-    def test_zf_trace_one_and_sinr_nonnegative(self):
-        h = _diagonal_channel()
-        hk = h[:, :, 1]
-        u, s, vh = np.linalg.svd(hk, full_matrices=False)
-        capacity, sinrs, trace = zf_mmse_subcarrier_from_svd(
-            u, s, vh, 2, noise_power=1.0
+    def test_selected_stream_capacity_uses_shannon_power_normalization(self):
+        eigenvalues = np.array([[16.0, 4.0]])
+        capacities = shannon_stream_capacities_from_eigenvalue_matrix(
+            eigenvalues,
+            noise_power=1.0,
+            tx_count=2,
+            max_streams=2,
         )
-        self.assertTrue(np.isclose(trace, 1.0))
-        self.assertTrue(np.all(sinrs >= -1e-9))
-        self.assertTrue(np.isfinite(capacity))
-
-        aggregate = aggregate_zf_mmse_from_svd(
-            [(u, s, vh)], noise_power=1.0, max_streams=2
-        )
-        self.assertTrue(np.all(np.asarray(aggregate["sinr_matrix"]) >= -1e-9))
-        self.assertLess(aggregate["max_trace_relative_error"], 1e-9)
+        expected_k1 = np.log2(1.0 + 16.0 / 2.0)
+        expected_k2 = expected_k1 + np.log2(1.0 + 4.0 / 2.0)
+        self.assertTrue(np.isclose(capacities[0], expected_k1))
+        self.assertTrue(np.isclose(capacities[1], expected_k2))
 
     def test_4x4_channel_capacities_are_finite(self):
         h = np.zeros((4, 4, 8), dtype=complex)
@@ -185,6 +187,70 @@ class AnalysisFrameworkTests(unittest.TestCase):
             self.assertEqual(sets[0].ue_csi_dir, csi_dir)
             self.assertEqual(sets[0].gnb_csv, gnb_csv)
             self.assertEqual(sets[0].direction, "")
+
+    def test_mock_ul_three_rounds_uses_srs_and_preserves_new_fields(self):
+        fixture = tempfile.mkdtemp(prefix="oai_ul_3rounds_")
+        self.addCleanup(shutil.rmtree, fixture, True)
+        generate(fixture)
+        sets = discover_measurement_sets(fixture)
+        self.assertEqual(len(sets), 1)
+        measurement = sets[0]
+        self.assertIsNotNone(measurement.gnb_srs_dir)
+
+        frame = load_measurement_frame(measurement, "ul")
+        srs_map = _load_channel_map(
+            measurement.gnb_srs_dir, channel_kind="srs"
+        )
+        csi_map = _load_channel_map(
+            measurement.ue_csi_dir, channel_kind="csi"
+        )
+        self.assertEqual(len(srs_map), 9)
+        self.assertEqual(len(csi_map), 9)
+
+        frame, warnings = _match_channel(
+            frame,
+            srs_map,
+            tolerance_ms=200.0,
+            channel_kind="srs",
+        )
+        self.assertFalse(warnings)
+        self.assertEqual(set(frame["test_round"]), {1, 2, 3})
+        self.assertEqual(set(frame["channel_kind"]), {"srs"})
+        self.assertTrue(frame["channel_file"].str.contains("/srs_").all())
+        self.assertTrue(frame["ue_rsrp_dBm"].notna().all())
+
+        second, validation = process_measurements(
+            frame,
+            noise_power=1.0,
+            max_streams=4,
+            snr_db=20.0,
+        )
+        self.assertEqual(len(second), 9)
+        self.assertIn("ul_tpmi", second.columns)
+        self.assertIn("ul_rssi_dbfs", second.columns)
+        self.assertIn("selected_stream_capacity", second.columns)
+        self.assertTrue(second["selected_stream_capacity"].notna().all())
+        self.assertFalse(
+            any(column.startswith("zf_") for column in second.columns)
+        )
+        self.assertTrue(validation["validated_subcarriers"].gt(0).all())
+
+        position = aggregate_position_level(second, top_ratio=0.5)
+        self.assertEqual(set(position["test_round"]), {1, 2, 3})
+        self.assertEqual(set(position["channel_kind"]), {"srs"})
+
+        dl_frame = load_measurement_frame(measurement, "dl")
+        dl_frame, dl_warnings = _match_channel(
+            dl_frame,
+            csi_map,
+            tolerance_ms=200.0,
+            channel_kind="csi",
+        )
+        self.assertFalse(dl_warnings)
+        self.assertEqual(set(dl_frame["channel_kind"]), {"csi"})
+        self.assertTrue(dl_frame["channel_file"].str.contains("/channel_").all())
+        self.assertEqual(dl_frame.loc[0, "throughput_mbps"], 9.0)
+        self.assertEqual(dl_frame.loc[0, "gnb_throughput_mbps"], 10.0)
 
     def test_top_50_position_aggregation(self):
         df = pd.DataFrame(

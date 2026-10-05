@@ -21,6 +21,11 @@ DIRECTION_COLORS = {
     "dl": "#d62728",
 }
 
+LAYER_LINE_STYLES = {
+    "ul": {"color": "#d62728", "linestyle": "-"},
+    "dl": {"color": "#d62728", "linestyle": "--"},
+}
+
 METRIC_COLORS = {
     "throughput_mbps": "#1f77b4",
     "actual_layers": "#d62728",
@@ -28,8 +33,7 @@ METRIC_COLORS = {
     "shannon_capacity": "#9467bd",
     "svd_capacity": "#ff7f0e",
     "svd_optimal_stream": "#e377c2",
-    "zf_capacity": "#17becf",
-    "zf_optimal_stream": "#bcbd22",
+    "selected_stream_capacity": "#17becf",
 }
 
 METRIC_MARKERS = {
@@ -39,8 +43,7 @@ METRIC_MARKERS = {
     "shannon_capacity": "D",
     "svd_capacity": "v",
     "svd_optimal_stream": "P",
-    "zf_capacity": "X",
-    "zf_optimal_stream": "*",
+    "selected_stream_capacity": "X",
 }
 
 METRIC_NAMES = {
@@ -50,8 +53,7 @@ METRIC_NAMES = {
     "shannon_capacity": "Shannon capacity",
     "svd_capacity": "SVD capacity",
     "svd_optimal_stream": "SVD selected layers",
-    "zf_capacity": "ZF capacity",
-    "zf_optimal_stream": "ZF selected layers",
+    "selected_stream_capacity": "Selected-stream capacity",
 }
 
 
@@ -59,10 +61,6 @@ def _figure_dir(output_dir: str) -> str:
     path = os.path.join(output_dir, "figures")
     os.makedirs(path, exist_ok=True)
     return path
-
-
-def _slug(name: str) -> str:
-    return name.replace("_", "-").replace(".", "")
 
 
 def _fit_line(x, y):
@@ -166,7 +164,7 @@ def plot_correlation_comparison(
     )
     pivot.plot(kind="bar", ax=ax)
     ax.set_ylabel("Pearson correlation with throughput")
-    ax.set_title("CSI Predictor Correlations by Analysis Mode and Direction")
+    ax.set_title("Channel Predictor Correlations by Analysis Mode and Direction")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(_figure_dir(output_dir), "correlation_comparison.png"), dpi=200)
@@ -189,7 +187,7 @@ def plot_stream_selection(
     ax.bar(valid["label"], valid["accuracy"] * 100.0, color="#4c72b0")
     ax.set_xticks(np.arange(len(valid)))
     ax.set_ylabel("Stream prediction accuracy (%)")
-    ax.set_title("SVD and ZF Predicted Rank Accuracy vs Measured Layers")
+    ax.set_title("SVD Predicted Rank Accuracy vs Measured Layers")
     ax.set_xticklabels(valid["label"], rotation=45, ha="right")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
@@ -319,8 +317,13 @@ def _plot_timeseries_mode(
         ("throughput_mbps", "actual_layers", "Throughput (Mbps)", "Layers"),
         ("rsrp_dBm", None, "RSRP (dBm)", None),
         ("shannon_capacity", None, "Shannon capacity (bits/s/Hz)", None),
-        ("svd_capacity", "svd_optimal_stream", "SVD capacity (bits/s/Hz)", "Selected layers"),
-        ("zf_capacity", "zf_optimal_stream", "ZF capacity (bits/s/Hz)", "Selected layers"),
+        ("svd_capacity", None, "SVD capacity (bits/s/Hz)", None),
+        (
+            "selected_stream_capacity",
+            None,
+            "Selected-stream capacity (bits/s/Hz)",
+            None,
+        ),
     ]
     fig, axes = plt.subplots(
         len(panels),
@@ -348,38 +351,55 @@ def _plot_timeseries_mode(
             ax.set_axis_off()
             continue
 
-        show_secondary = secondary_metric is not None and not is_position
+        show_secondary = secondary_metric is not None
         ax2 = None
         if show_secondary:
             ax2 = ax.twinx()
 
-        for set_name, group in sub.groupby("set", sort=True):
+        for (set_name, direction_name), group in sub.groupby(
+            ["set", "direction"], sort=True
+        ):
             group = group.sort_values(x_column)
             x = _series_x(group, x_column)
+            direction = str(direction_name).lower()
 
             if metric in group.columns:
                 values = pd.to_numeric(group[metric], errors="coerce")
                 ax.plot(
                     x,
                     values,
-                    label=f"{set_name} {_metric_label(metric)}",
+                    label=(
+                        f"{set_name} {direction.upper()} "
+                        f"{_metric_label(metric)}"
+                    ),
                     **_series_kwargs(metric, x_column, primary_lw),
                 )
 
             if ax2 is not None and secondary_metric in group.columns:
                 values = pd.to_numeric(group[secondary_metric], errors="coerce")
+                layer_style = LAYER_LINE_STYLES.get(
+                    direction,
+                    {"color": "#d62728", "linestyle": "-"},
+                )
                 ax2.plot(
                     x,
                     values,
-                    label=f"{set_name} {_metric_label(secondary_metric)}",
-                    **_series_kwargs(secondary_metric, x_column, 0.5),
+                    label=(
+                        f"{set_name} "
+                        f"{direction.upper() if direction else ''} streams"
+                    ),
+                    linewidth=0.5,
+                    drawstyle="steps-post",
+                    **layer_style,
                 )
 
         ax.set_ylabel(ylabel)
         ax.grid(alpha=0.3)
 
         if is_position:
-            for set_name, group in sub.groupby("set", sort=True):
+            for (set_name, direction_name), group in sub.groupby(
+                ["set", "direction"], sort=True
+            ):
                 group = group.sort_values(x_column)
                 x = _series_x(group, x_column)
                 throughput = pd.to_numeric(group.get("throughput_mbps"), errors="coerce")
@@ -460,7 +480,7 @@ def _plot_timeseries_mode(
                             )
 
         if ax2 is not None:
-            ax2.set_ylabel(secondary_ylabel)
+            ax2.set_ylabel("Transmission streams")
             ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
 
         if row_idx in (1, 2, 3, 4):

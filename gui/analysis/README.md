@@ -1,72 +1,59 @@
-# CSI-Based Throughput Prediction Framework
+# SRS/CSI Channel Analysis
 
-This package analyzes OAI CSI-RS channel snapshots together with UE/gNB GUI
-measurement CSVs. It computes Shannon, SVD-precoding, and ZF+MMSE capacities
-from the raw OAI channel, keeps RSRP as an independent baseline, and evaluates
-which CSI-derived metric best predicts measured throughput.
+Analyze one paired gNB/UE recording archive and compare channel capacity with
+measured throughput.
+
+## Input
+
+```text
+experiment/
+  gnb_<timestamp>/
+    gui_gnb_log_<timestamp>.csv
+    gui_gnb_log_<timestamp>/srs_*.npy
+  ue_<timestamp>/
+    gui_ue_log_<timestamp>.csv
+    gui_ue_log_<timestamp>/channel_*.npy
+```
+
+- `--direction ul`: gNB CSV is primary, SRS is the channel, UE CSV supplements
+  RSRP and other UE-side fields.
+- `--direction dl`: UE CSV is primary, CSI-RS is the channel, gNB CSV is
+  optional supplemental data.
+- All `test_round` groups in the archive pair are analyzed together.
 
 ## Run
 
-The CLI processes one test round per invocation. Point `--dataset-dir` at the
-round folder and pass one `--direction` value:
-
 ```bash
 python gui/analysis/main.py \
-  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round1 \
+  --dataset-dir /path/to/experiment \
   --direction ul \
   --output-dir gui/analysis/analysis_results
 ```
 
+Generate the three-round mock fixture:
+
+```bash
+python gui/analysis/tests/generate_mock_ul_3rounds.py
+```
+
+Then run it:
+
 ```bash
 python gui/analysis/main.py \
-  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round2 \
-  --direction dl \
+  --dataset-dir /tmp/oai_ul_3rounds \
+  --direction ul \
+  --snr 20 \
   --output-dir gui/analysis/analysis_results
 ```
 
-For a UL round, the UE CSV, the same-stem CSI directory, and the gNB CSV are
-expected inside the same round folder.
-
-To regenerate the time-series figures directly from existing processed CSVs
-without rerunning the data-processing pipeline:
-
-```bash
-python gui/analysis/plot_timeseries.py \
-  --second-level gui/analysis/analysis_results/processed_second_level.csv \
-  --position-level gui/analysis/analysis_results/processed_position_level.csv \
-  --output-dir gui/analysis/analysis_results
-```
-
-To plot one processed CSV at a time and split it into per-round figures:
-
-```bash
-python gui/analysis/plot_timeseries.py --csv gui/analysis/analysis_results/processed_second_level.csv
-python gui/analysis/plot_timeseries.py --csv gui/analysis/analysis_results/processed_position_level.csv
-```
-
-## Key Options
-
-- `--noise-power`: common fixed noise power, default `1.0` matching OAI's
-  CSI-RS zero-noise fallback.
-- `--snr`: optional target SNR in dB. When set, each channel is scaled so its
-  mean power over valid CSI-RS subcarriers equals `10^(snr/10)` and the noise
-  power is forced to `1.0`, removing absolute RX-gain scaling while preserving
-  channel shape. When unset, the raw channel power is kept as-is.
-
-The stored channel originates from `c16_t` fixed-point samples. Both modes
-divide the channel by `32768` first, converting the 16-bit integer range to
-`[-1, 1)`.
-- `--top-ratio`: retained highest-throughput fraction per position, default
-  `0.5`.
-- `--pair-tolerance-ms`: UL gNB/UE timestamp pairing tolerance, default `2000`.
-- `--csi-tolerance-ms`: CSI timestamp matching tolerance, default `200`.
-- `--position-gap-s`: timestamp-gap segmentation threshold used when the CSV
-  does not have a multi-value `test_round` column.
-- `--direction`: required per-call direction, either `ul` or `dl`.
+Use `--no-plots` to skip figure generation.
 
 ## Outputs
 
-The pipeline writes processed second-level and position-level CSVs, validation
-reports, correlation and regression tables, stream-selection summaries and
-confusion matrices, publication figures, and a Markdown final report under the
-configured output directory.
+The output directory contains second-level and position-level CSVs, validation
+files, correlation/regression tables, stream-selection results,
+`figures/position_metrics.png`, other figures, and `final_report.md`.
+
+Capacity formulas, field definitions, plotting conventions, and all CLI
+options are documented in
+`doc/local-edit/csi_throughput_prediction.md`.

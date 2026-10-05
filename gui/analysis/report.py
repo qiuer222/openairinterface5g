@@ -65,30 +65,34 @@ def write_final_report(
     snr_db: float | None,
     top_ratio: float,
     pair_tolerance_ms: float,
+    channel_kind: str,
 ) -> str:
     output_path = os.path.join(output_dir, "final_report.md")
     lines = [
-        "# CSI-Based Throughput Prediction Report",
+        "# SRS/CSI Channel-Based Throughput Prediction Report",
         "",
         "## Analysis Setup",
         "",
         f"- Second-level samples: `{len(second_df)}`",
         f"- Position-level samples: `{len(position_df)}`",
+        f"- Channel kind: `{channel_kind}`",
+        "- Selected-stream capacity: first actual-layer singular values, "
+        "normalized by transmit antennas and noise power",
         f"- Noise power: `{noise_power}`",
         f"- Target SNR normalization: `{snr_db}` dB" if snr_db is not None
         else "- Target SNR normalization: `off` (raw channel power kept)",
         f"- Retained throughput ratio per position: `{top_ratio:.0%}`",
-        f"- UL gNB pairing tolerance: `{pair_tolerance_ms:.0f} ms`",
+        f"- CSV pairing tolerance: `{pair_tolerance_ms:.0f} ms`",
         "",
         *(
             (
-                "Each channel was normalized so its mean power over valid CSI-RS",
+                "Each channel was normalized so its mean power over valid",
                 "subcarriers equals the target SNR with the common fixed noise",
                 "power, removing absolute RX-gain scaling while preserving shape.",
             )
             if snr_db is not None
             else (
-                "The CSI channel is used in raw OAI `c16`/FFT units. Capacity metrics",
+                "The selected channel is used in raw OAI `c16`/FFT units. Capacity metrics",
                 "therefore use the same raw channel power and a common fixed noise power;",
                 "RSRP is kept as an independent baseline predictor.",
             )
@@ -96,11 +100,9 @@ def write_final_report(
         "",
         "## Validation",
         "",
-        f"- Validated CSI rows: `{validation_summary.get('rows', 0)}`",
+        f"- Validated channel rows: `{validation_summary.get('rows', 0)}`",
         f"- Max Frobenius/eigenvalue relative error: `{_fmt(validation_summary.get('max_power_relative_error', float('nan')))}`",
         f"- Max SVD formula relative error: `{_fmt(validation_summary.get('max_svd_relative_error', float('nan')))}`",
-        f"- Max ZF precoder trace error: `{_fmt(validation_summary.get('max_zf_trace_relative_error', float('nan')))}`",
-        f"- Max negative SINR error: `{_fmt(validation_summary.get('max_sinr_negative_error', float('nan')))}`",
         f"- Result: `{validation_summary.get('result', 'FAIL')}`",
         "",
         "## Per-Second Correlations",

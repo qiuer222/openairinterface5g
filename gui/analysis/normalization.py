@@ -1,4 +1,4 @@
-"""CSI normalization policy for raw OAI channel estimates.
+"""Normalization policy for raw OAI CSI-RS and SRS channel estimates.
 
 The recorded ``c16_t`` channel values already carry OAI fixed-point, FFT, and
 RF-gain scaling. This framework intentionally preserves that raw channel power
@@ -22,7 +22,7 @@ def normalize_channel(
     noise_power: float = NOISE_POWER_DEFAULT,
     snr_db: float | None = None,
 ) -> np.ndarray:
-    """Normalize a raw channel snapshot.
+    """Normalize a raw CSI-RS or SRS channel snapshot.
 
     The stored channel originates from ``c16_t`` fixed-point samples, so it is
     first rescaled from the 16-bit integer range to ``[-1, 1)`` by dividing by

@@ -1,38 +1,50 @@
-# CSI-Based Throughput Prediction Analysis
+# SRS/CSI Channel-Based Throughput Prediction Analysis
 
 ## Purpose
 
-This document describes the modular CSI throughput prediction framework under
-`gui/analysis/`. The framework reads OAI UE/gNB measurement CSVs and recorded
-CSI-RS channel snapshots, computes Shannon/SVD/ZF+MMSE capacity metrics, and
+This document describes the modular channel throughput prediction framework
+under `gui/analysis/`. The framework reads paired OAI gNB/UE measurement CSVs
+and recorded SRS or CSI-RS channel snapshots, computes Shannon,
+SVD-candidate-stream, and actual-layer-selected stream capacities, and
 compares those metrics with measured throughput. It also evaluates how well
-SVD and ZF predicted rank matches the actual scheduled layer count.
+SVD predicted rank matches the actual scheduled layer count.
 
 ## Input Data
 
-Each measurement round contains:
+The experiment root contains one gNB archive and one matching UE archive:
 
-- A UE GUI CSV, for example `gui_ue_log_20260807_145628.csv`.
-- A same-stem directory with `channel_*.npy` CSI-RS files.
-- A gNB GUI CSV for UL rounds, containing `throughput_mbps`, `ul_mcs`, and
-  `ul_layers`.
+- `gnb_<timestamp>/gui_gnb_log_<timestamp>.csv`.
+- `gnb_<timestamp>/gui_gnb_log_<timestamp>/srs_*.npy`.
+- `ue_<timestamp>/gui_ue_log_<timestamp>.csv`.
+- `ue_<timestamp>/gui_ue_log_<timestamp>/channel_*.npy`.
 
-For DL rounds, throughput, MCS, and layers are read directly from the UE CSV.
-For UL rounds, the gNB values are paired to UE CSI/RSRP rows by nearest
-timestamp.
+The gNB and UE suffixes must match. Each CSV may contain multiple test rounds;
+`test_round` is used as the position ID.
+
+- UL mode uses the gNB CSV as the primary record and matches SRS snapshots.
+  UE rows are paired by timestamp to provide RSRP and other UE-side fields.
+- DL mode uses the UE CSV as the primary record and matches CSI-RS snapshots.
+  The gNB CSV is optional supplemental data.
 
 ## Processing Steps
 
 1. **Discovery and pairing**
-   `data_loader.py` discovers UE CSVs with same-stem CSI directories, finds the
-   matching gNB CSV, and builds a `MeasurementSet`.
+   `data_loader.py` discovers matching `gnb_*`/`ue_*` folders, finds each CSV
+   and same-stem channel directory, and builds a `MeasurementSet`. Legacy
+   round-folder layouts remain supported as a fallback.
 
-2. **CSI parsing**
-   `csi_parser.py` loads `channel_*.npy` files. A 3D array is interpreted as
-   `H(rx, tx, subcarrier)`. A 4D SRS file is reduced by taking the first symbol.
-   Subcarriers with zero channel energy are excluded from all calculations.
+2. **Channel parsing**
+   `csi_parser.py` loads `channel_*.npy` or `srs_*.npy`. A 3D array is
+   interpreted as `H(rx, tx, subcarrier)`. A 4D SRS file is reduced by taking
+   the first symbol. Zero-energy subcarriers are excluded.
 
-3. **Normalization and noise model**
+3. **CSV synchronization**
+   Primary CSV columns retain their names. Supplemental UE columns use a `ue_`
+   prefix in UL mode; supplemental gNB columns use a `gnb_` prefix in DL mode.
+   Canonical fields include `throughput_mbps`, `mcs`, `layers`, and
+   `rsrp_dBm`.
+
+4. **Normalization and noise model**
    `normalization.py` rescales the stored channel from the `c16_t` 16-bit
    fixed-point integer range to `[-1, 1)` by dividing by `32768` for every
    sample. This rescale is applied for both normalization modes:
@@ -42,23 +54,24 @@ timestamp.
      defaulting to `1.0` because OAI uses `1` as its CSI-RS zero-noise
      fallback. RSRP is not converted to SNR.
    - **`--snr` mode:** each channel is additionally scaled so its mean power
-     over valid CSI-RS subcarriers equals `10^(snr/10)` (with the noise power
+     over valid measured subcarriers equals `10^(snr/10)` (with the noise power
      forced back to `1.0`), removing absolute RX-gain scaling while preserving
      channel shape.
 
-4. **Feature extraction**
+5. **Feature extraction**
    `feature_extraction.py` aggregates singular values, eigenvalues, Frobenius
    power, effective rank, and condition number across valid subcarriers.
 
-5. **Capacity calculation**
+6. **Capacity calculation**
    Capacity is computed per valid subcarrier and averaged over the valid
-   CSI-RS bandwidth.
+   measured bandwidth.
 
-6. **Position aggregation**
+7. **Position aggregation**
    `test_round` is used as the position ID when it has more than one unique
    value; otherwise timestamp gaps are used. The top `50%` throughput samples
-   are retained per position, and CSI/features are averaged over the same
-   retained samples.
+   are retained per position, and channel features are averaged over those
+   samples. Discrete fields such as layers, RV, NDI, CQI, RI, and TPMI use the
+   mode.
 
 ## Capacity Formulas
 
@@ -82,19 +95,18 @@ C_svd(K) = mean_k sum_{i=1..K} log2(1 + lambda_i(k) / (K * N0))
 
 The best stream count is the `K` that maximizes `C_svd(K)`.
 
-### ZF Precoding + MMSE Receiver Capacity
+### Actual-Layer Selected Stream Capacity
 
-For each candidate `K`:
+For each sample, `K` is the actual UL/DL layer count from the selected primary
+CSV:
 
-1. Build a ZF precoder `W` from the strongest `K` right singular vectors and
-   singular values.
-2. Normalize `W` so that `trace(W W^H) = 1`.
-3. Compute the equivalent channel `H_eq = H W`.
-4. Compute the MMSE receiver and per-stream SINRs.
-5. Compute `C_zf(K) = sum_i log2(1 + SINR_i)` and average over valid
-   subcarriers.
+```text
+C_selected(K) = mean_k sum_{i=1..K} log2(1 + lambda_i(k) / (N_t * N0))
+```
 
-The best stream count is the `K` that maximizes `C_zf(K)`.
+This uses the same transmit-power normalization as Shannon capacity:
+each eigenvalue is divided by `N_t * N0`. Unlike SVD candidate capacity, `K`
+is not used again in the denominator.
 
 ## Validation
 
@@ -102,8 +114,6 @@ The pipeline validates:
 
 - Frobenius power versus eigenvalue sum.
 - SVD capacity formula consistency.
-- ZF precoder trace equal to `1`.
-- Nonnegative SINR values.
 
 If validation fails, `validation_report.csv` is written and the pipeline stops
 before generating conclusions.
@@ -115,7 +125,7 @@ For each predictor:
 - `rsrp_dBm`
 - `shannon_capacity`
 - `svd_capacity`
-- `zf_capacity`
+- `selected_stream_capacity`
 
 the framework computes:
 
@@ -123,40 +133,44 @@ the framework computes:
 - Spearman correlation with throughput.
 - Linear regression `R2`, `MAE`, and `RMSE`.
 
-It also computes SVD and ZF stream-selection accuracy against actual layers,
+It also computes SVD stream-selection accuracy against actual layers,
 including confusion matrices and mean absolute error.
 
 ## Script Usage
 
-Run one test round per invocation. Point `--dataset-dir` at the round folder
-and pass a single `--direction`:
+Point `--dataset-dir` at the experiment root and pass a single `--direction`:
+
+```bash
+python gui/analysis/tests/generate_mock_ul_3rounds.py
+```
+
+Then run UL analysis:
 
 ```bash
 .venv/bin/python gui/analysis/main.py \
-  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round1 \
+  --dataset-dir /tmp/oai_ul_3rounds \
   --direction ul \
   --output-dir gui/analysis/analysis_results
 ```
 
-For a DL round, pass that round's folder and `--direction dl`:
+For a DL experiment, pass that root and `--direction dl`:
 
 ```bash
 .venv/bin/python gui/analysis/main.py \
-  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round2 \
+  --dataset-dir /path/to/dl_experiment \
   --direction dl \
   --output-dir gui/analysis/analysis_results
 ```
 
-The UE CSV, its same-stem CSI directory, and the gNB CSV for UL rounds are
-expected inside the same round folder. Exactly one measurement round must be
-present per invocation.
+Exactly one matching gNB/UE archive pair must be present per invocation. All
+`test_round` values in that pair are processed together.
 
 Optional `--snr` normalizes every channel to a target SNR in dB before the
 capacity calculations, removing RX-gain-dependent power variation:
 
 ```bash
 .venv/bin/python gui/analysis/main.py \
-  --dataset-dir /media/qiuer/BEA6-BBCE/0807/round1 \
+  --dataset-dir /tmp/oai_ul_3rounds \
   --direction ul \
   --snr 20 \
   --output-dir gui/analysis/analysis_results
@@ -189,28 +203,27 @@ argument:
 
 ## Time-Series Plot Details
 
-Since each run analyzes exactly one round with a single direction, the
-time-series figures are a single column of five subplots (no left/right
-direction split). The second-level and position-level figures share the same
-subplot layout:
+Each run analyzes one direction and all test rounds in the selected archive
+pair. The time-series figures use a single column of five subplots; the
+second-level and position-level figures share the same layout:
 
-1. Throughput. For the second-level figure this subplot additionally shows the
-   actual scheduled layer count on a right-hand dual axis.
+1. Throughput with actual transmission streams on a right-hand dual axis as a
+   thin red line. UL uses a solid red line and DL uses a dashed red line.
 2. RSRP with its Pearson correlation labeled `r = xx` on the left and the
    legend on the right.
 3. Shannon capacity with its Pearson correlation labeled `r = xx`.
-4. SVD capacity. For the second-level figure, the SVD selected stream count is
-   shown on a right-hand dual axis.
-5. ZF capacity. For the second-level figure, the ZF selected stream count is
-   shown on a right-hand dual axis.
+4. SVD candidate capacity.
+5. Actual-layer selected stream capacity.
 
 The second-level figure uses real timestamps as the x-axis (rendered as a
-sample index), while the position-level figure uses `position_id`.
+sample index), while the position-level figure uses `position_id`. The
+throughput panel always includes the actual transmission-stream count on a
+thin red right-hand axis: solid for UL and dashed for DL.
 
 The second-level figure uses line width 1 for capacity/throughput and 0.5 for
-layer/stream-count series. The position-level figure draws only the metric
-lines with a bolder line width (2.5) and no layer/stream-count series; each
-metric has a distinct color and marker.
+the stream-count series. The position-level figure uses a bolder line width
+(2.5) and markers for capacity metrics while retaining the thin stream line.
+Each metric has a distinct color.
 
 For the position-level figure, the max-RSRP and max-Shannon-capacity positions
 are marked with vertical dotted lines across the subplots. In the throughput
@@ -222,6 +235,19 @@ When `--csv` points to one processed CSV, the script splits the data by `set`
 and writes one figure per round. When it is omitted, the script combines the
 second-level and position-level frames into combined figures.
 
+## Derived Capacity Columns
+
+The processed second-level CSV includes:
+
+| Column | Meaning |
+|---|---|
+| `stream_capacity_k1` ... `stream_capacity_k4` | Cumulative Shannon-style capacity using the first K singular values |
+| `selected_stream_count` | Actual layer count used as K, clamped to the available channel rank |
+| `selected_stream_capacity` | `stream_capacity_k<K>` selected by the actual UL/DL layer count |
+
+ZF capacity columns, ZF SINR columns, and ZF validation metrics are not
+generated.
+
 ## Outputs
 
 The default output directory is `gui/analysis/analysis_results/` and includes:
@@ -231,10 +257,12 @@ The default output directory is `gui/analysis/analysis_results/` and includes:
 - `validation_report.csv` and `validation_summary.txt`
 - correlation and regression tables
 - stream-selection summaries and confusion matrices
+- `figures/position_metrics.png`
 - `figures/timeseries_second_*.png`
 - `figures/timeseries_position_*.png`
 - `figures/scatter_*.png`
 - `final_report.md`
 
-Since one round is analyzed per run, output files use plain names without a
-per-round suffix. The generated result directory is ignored by Git.
+`position_metrics.png` is generated automatically by the main analysis
+pipeline. The additional `timeseries_*.png` files can be regenerated with
+`plot_timeseries.py`.

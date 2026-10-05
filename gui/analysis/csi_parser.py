@@ -1,4 +1,4 @@
-"""Load OAI CSI channel snapshots and select valid CSI-RS subcarriers."""
+"""Load OAI CSI-RS or SRS channel snapshots and select valid subcarriers."""
 
 from __future__ import annotations
 

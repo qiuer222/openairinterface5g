@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List
-
 import numpy as np
 import pandas as pd
 from scipy import stats
 
 
-PREDICTORS = ["rsrp_dBm", "shannon_capacity", "svd_capacity", "zf_capacity"]
+PREDICTORS = [
+    "rsrp_dBm",
+    "shannon_capacity",
+    "svd_capacity",
+    "selected_stream_capacity",
+]
 
 
 def safe_pearson(x, y) -> float:

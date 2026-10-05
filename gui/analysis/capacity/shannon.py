@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from typing import List, Sequence
 
 import numpy as np
 
@@ -29,6 +29,45 @@ def shannon_capacity_from_eigenvalue_matrix(
         axis=1,
     )
     return float(np.mean(per_subcarrier))
+
+
+def shannon_stream_capacities_from_eigenvalue_matrix(
+    eigenvalue_matrix: np.ndarray,
+    noise_power: float = 1.0,
+    tx_count: int | None = None,
+    max_streams: int | None = None,
+) -> List[float]:
+    """Return cumulative Shannon capacity for the first K eigenvalues.
+
+    Every eigenmode uses the same transmit-power normalization:
+    ``lambda / (tx_count * noise_power)``. Unlike SVD capacity, K is not used
+    again in the denominator.
+    """
+    arr = np.asarray(eigenvalue_matrix, dtype=float)
+    if arr.ndim != 2 or arr.shape[0] == 0:
+        return []
+    if noise_power <= 0:
+        raise ValueError("noise_power must be positive")
+    if tx_count is None:
+        tx_count = max(arr.shape[1], 1)
+    if tx_count <= 0:
+        return []
+    max_streams = min(
+        arr.shape[1],
+        max_streams if max_streams is not None else arr.shape[1],
+    )
+    capacities: List[float] = []
+    for k in range(1, max_streams + 1):
+        per_subcarrier = np.sum(
+            np.log2(
+                1.0
+                + np.maximum(arr[:, :k], 0.0)
+                / (float(tx_count) * float(noise_power))
+            ),
+            axis=1,
+        )
+        capacities.append(float(np.mean(per_subcarrier)))
+    return capacities
 
 
 def shannon_capacity_from_eigenvalues(
