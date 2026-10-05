@@ -197,6 +197,7 @@ At startup the GUI clears the configured iperf log. On exit and before Restart
 it asks whether this run's CSV, SRS data, and iperf log should be stored:
 
 - `Yes` opens the former folder-name prompt and archives the recordings.
+- The default archive folder name is `gnb_<timestamp>`.
 - `No` asks for a second confirmation before deleting this run's files. If
   deletion is cancelled, the save/store question is shown again.
 

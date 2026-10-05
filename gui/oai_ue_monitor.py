@@ -557,7 +557,9 @@ class MainWindow(QMainWindow):
             pass
 
     def _default_archive_folder_name(self) -> str:
-        base_name = self._csv_start_ts or time.strftime("%Y%m%d_%H%M%S")
+        base_name = "ue_" + (
+            self._csv_start_ts or time.strftime("%Y%m%d_%H%M%S")
+        )
         record_dir = os.path.join(GUI_DIR, "record")
         folder_name = base_name
         suffix = 2

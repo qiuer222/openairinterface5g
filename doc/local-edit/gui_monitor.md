@@ -375,6 +375,7 @@ is mirrored by `gui/oai_gnb_monitor.py`.
 - On exit or Restart, the GUI first asks whether to store this run's CSV,
   channel/SRS data, and iperf log.
 - `Yes` opens the folder-name prompt and archives the recordings.
+- The default archive folder name is `ue_<timestamp>`.
 - `No` asks for a second confirmation before deleting this run's files. If
   deletion is cancelled, the store question is shown again.
 - Archive selection moves the CSV, channel/srs files, and iperf log into:
