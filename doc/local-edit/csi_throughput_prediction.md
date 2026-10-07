@@ -58,6 +58,18 @@ The gNB and UE suffixes must match. Each CSV may contain multiple test rounds;
      forced back to `1.0`), removing absolute RX-gain scaling while preserving
      channel shape.
 
+   For UL/SRS analysis, the per-row `ul_sinr` value is used as `snr` when it is
+   available. `ul_sinr` is stored as dB x10 in shared memory and converted to
+   dB by the Python reader. The SRS channel is therefore normalized so:
+
+   ```text
+   mean_channel_power = noise_power * 10^(ul_sinr_db / 10)
+   ```
+
+   Missing or invalid `ul_sinr` falls back to `--snr`; if that is also unset,
+   the raw c16-rescaled channel power is retained. DL/CSI-RS analysis continues
+   to use the global `--snr` value.
+
 5. **Feature extraction**
    `feature_extraction.py` aggregates singular values, eigenvalues, Frobenius
    power, effective rank, and condition number across valid subcarriers.
@@ -165,19 +177,21 @@ For a DL experiment, pass that root and `--direction dl`:
 Exactly one matching gNB/UE archive pair must be present per invocation. All
 `test_round` values in that pair are processed together.
 
-Optional `--snr` normalizes every channel to a target SNR in dB before the
-capacity calculations, removing RX-gain-dependent power variation:
+Optional `--snr` supplies a fallback normalization target for UL rows missing
+`ul_sinr` and the normalization target for DL CSI-RS analysis:
 
 ```bash
 .venv/bin/python gui/analysis/main.py \
-  --dataset-dir /tmp/oai_ul_3rounds \
-  --direction ul \
+  --dataset-dir /path/to/dl_experiment \
+  --direction dl \
   --snr 20 \
   --output-dir gui/analysis/analysis_results
 ```
 
-When `--snr` is given, the noise power is forced to `1.0`; when omitted, the
-raw (32768-rescaled) channel power is used.
+For DL, setting `--snr` forces noise power to `1.0`; without it, raw
+`c16`/32768-rescaled channel power is used. For UL, `ul_sinr` takes priority
+and `--noise-power` remains the common noise power in the normalization
+target.
 
 Plot time series directly from existing processed CSVs:
 
@@ -244,6 +258,8 @@ The processed second-level CSV includes:
 | `stream_capacity_k1` ... `stream_capacity_k4` | Cumulative Shannon-style capacity using the first K singular values |
 | `selected_stream_count` | Actual layer count used as K, clamped to the available channel rank |
 | `selected_stream_capacity` | `stream_capacity_k<K>` selected by the actual UL/DL layer count |
+| `normalization_snr_db` | SNR value used to normalize that row's channel |
+| `normalization_snr_source` | `ul_sinr`, `cli_snr`, or `raw` |
 
 ZF capacity columns, ZF SINR columns, and ZF validation metrics are not
 generated.

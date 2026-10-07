@@ -191,13 +191,15 @@ class GnbUlReader:
         received = int(m.ulsch_received)
         errors = int(m.ulsch_errors)
         sinr_db_x10 = int(m.sinr_db_x10)
+        # OAI stores the filtered PUSCH SNR in 0.1 dB units.
+        sinr_db = 0.0 if sinr_db_x10 == GNB_SINR_INVALID else sinr_db_x10 / 10.0
         rssi_fapi = None if m.rssi == GNB_RSSI_INVALID else int(m.rssi)
         return {
             "frame": m.frame,
             "slot": m.slot,
             "rnti": int(m.rnti),
             "bler": m.bler_x1000 / 10.0,
-            "sinr": 0.0 if sinr_db_x10 == -32768 else sinr_db_x10 / 10.0,
+            "sinr": sinr_db,
             "mcs": m.mcs,
             "qm": m.qam_mod_order,
             "tbs": m.tbs,

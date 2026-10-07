@@ -55,6 +55,7 @@ MODE_AGGREGATED_COLUMNS = {
     "dl_rv",
     "layers",
     "new_data_indicator",
+    "normalization_snr_source",
     "iperf_direction",
     "ri",
     "rv",
@@ -202,6 +203,22 @@ def _apply_selected_stream_capacity(
     )
 
 
+def _normalization_snr_db(
+    record: dict,
+    fallback_snr_db: float | None,
+) -> tuple[float, str]:
+    if str(record.get("direction", "")).lower() == "ul":
+        try:
+            ul_sinr_db = float(record.get("ul_sinr"))
+        except (TypeError, ValueError):
+            ul_sinr_db = float("nan")
+        if np.isfinite(ul_sinr_db):
+            return ul_sinr_db, "ul_sinr"
+    if fallback_snr_db is not None:
+        return float(fallback_snr_db), "cli_snr"
+    return float("nan"), "raw"
+
+
 def _channel_metrics(
     h: np.ndarray,
     valid: np.ndarray,
@@ -282,6 +299,9 @@ def process_measurements(
 
     for record in df.to_dict("records"):
         channel_file = record.get("channel_file")
+        normalization_snr_db, normalization_snr_source = (
+            _normalization_snr_db(record, snr_db)
+        )
         metadata = {
             key: value
             for key, value in record.items()
@@ -305,6 +325,8 @@ def process_measurements(
             "gnb_match_delta_ms": record.get("gnb_match_delta_ms"),
             "ue_timestamp": record.get("ue_timestamp"),
             "ue_match_delta_ms": record.get("ue_match_delta_ms"),
+            "normalization_snr_db": normalization_snr_db,
+            "normalization_snr_source": normalization_snr_source,
         }
         row = {
             **metadata,
@@ -326,7 +348,7 @@ def process_measurements(
                 valid,
                 noise_power=noise_power,
                 max_streams=max_streams,
-                snr_db=snr_db,
+                snr_db=normalization_snr_db,
             )
 
             features = metrics["features"]
@@ -530,9 +552,8 @@ def main() -> None:
         "--snr",
         type=float,
         default=None,
-        help="target SNR in dB to normalize each channel's mean power to; "
-        "when set, noise power is forced to the default (1.0) and the "
-        "channel is scaled to 10^(snr/10) so absolute RX gain is removed",
+        help="fallback target SNR in dB. UL uses each row's ul_sinr when "
+        "available; DL uses this value when set",
     )
     parser.add_argument("--top-ratio", type=float, default=0.5)
     parser.add_argument("--pair-tolerance-ms", type=float, default=2000.0)
@@ -555,7 +576,7 @@ def main() -> None:
         raise SystemExit("--noise-power must be positive")
     snr_db = args.snr
     noise_power = args.noise_power
-    if snr_db is not None:
+    if args.direction == "dl" and snr_db is not None:
         noise_power = NOISE_POWER_DEFAULT
 
     measurements = discover_measurement_sets(

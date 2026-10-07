@@ -230,6 +230,18 @@ class AnalysisFrameworkTests(unittest.TestCase):
         self.assertIn("ul_rssi_dbfs", second.columns)
         self.assertIn("selected_stream_capacity", second.columns)
         self.assertTrue(second["selected_stream_capacity"].notna().all())
+        self.assertEqual(
+            set(second["normalization_snr_source"]), {"ul_sinr"}
+        )
+        np.testing.assert_allclose(
+            second["normalization_snr_db"],
+            second["ul_sinr"],
+        )
+        np.testing.assert_allclose(
+            second["raw_channel_power_db"],
+            second["ul_sinr"],
+            atol=1e-10,
+        )
         self.assertFalse(
             any(column.startswith("zf_") for column in second.columns)
         )

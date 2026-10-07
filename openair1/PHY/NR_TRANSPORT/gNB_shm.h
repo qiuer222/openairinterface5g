@@ -68,7 +68,7 @@ typedef struct __attribute__((packed)) {
   uint32_t  ulsch_received;
   uint32_t  ulsch_errors;
   uint16_t  bler_x1000;
-  int16_t   sinr_db_x10;
+  int16_t   sinr_db_x10;           /* filtered PUSCH SNR in dB x10 */
   uint8_t   mcs;
   uint8_t   qam_mod_order;
   uint32_t  tbs;                   /* transport block size (bits)   */

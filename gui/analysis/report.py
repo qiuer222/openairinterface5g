@@ -68,6 +68,40 @@ def write_final_report(
     channel_kind: str,
 ) -> str:
     output_path = os.path.join(output_dir, "final_report.md")
+    if "normalization_snr_source" in second_df:
+        snr_sources = (
+            second_df["normalization_snr_source"]
+            .value_counts(dropna=False)
+            .to_dict()
+        )
+    else:
+        snr_sources = {}
+    if channel_kind == "srs":
+        snr_setting = "- SNR normalization: per-row `ul_sinr` in dB"
+        normalization_note = (
+            "Each SRS channel was normalized so its mean power over valid",
+            "subcarriers equals `noise_power * 10^(ul_sinr/10)`. Missing",
+            "`ul_sinr` values fall back to `--snr` or raw channel power.",
+        )
+    else:
+        snr_setting = (
+            f"- Target SNR normalization: `{snr_db}` dB"
+            if snr_db is not None
+            else "- Target SNR normalization: `off` (raw channel power kept)"
+        )
+        normalization_note = (
+            (
+                "Each CSI-RS channel was normalized so its mean power over valid",
+                "subcarriers equals the target SNR with the common fixed noise",
+                "power, removing absolute RX-gain scaling while preserving shape.",
+            )
+            if snr_db is not None
+            else (
+                "The selected channel is used in raw OAI `c16`/FFT units.",
+                "Capacity metrics use the same raw channel power and a common",
+                "fixed noise power; RSRP is kept as an independent predictor.",
+            )
+        )
     lines = [
         "# SRS/CSI Channel-Based Throughput Prediction Report",
         "",
@@ -79,24 +113,12 @@ def write_final_report(
         "- Selected-stream capacity: first actual-layer singular values, "
         "normalized by transmit antennas and noise power",
         f"- Noise power: `{noise_power}`",
-        f"- Target SNR normalization: `{snr_db}` dB" if snr_db is not None
-        else "- Target SNR normalization: `off` (raw channel power kept)",
+        snr_setting,
+        f"- SNR normalization sources: `{snr_sources}`",
         f"- Retained throughput ratio per position: `{top_ratio:.0%}`",
         f"- CSV pairing tolerance: `{pair_tolerance_ms:.0f} ms`",
         "",
-        *(
-            (
-                "Each channel was normalized so its mean power over valid",
-                "subcarriers equals the target SNR with the common fixed noise",
-                "power, removing absolute RX-gain scaling while preserving shape.",
-            )
-            if snr_db is not None
-            else (
-                "The selected channel is used in raw OAI `c16`/FFT units. Capacity metrics",
-                "therefore use the same raw channel power and a common fixed noise power;",
-                "RSRP is kept as an independent baseline predictor.",
-            )
-        ),
+        *normalization_note,
         "",
         "## Validation",
         "",

@@ -30,6 +30,7 @@ class GnbUlReaderTests(unittest.TestCase):
             frame=42,
             slot=7,
             rnti=0x1234,
+            sinr_db_x10=195,
             rv=2,
             new_data_indicator=1,
             target_code_rate=456,
@@ -48,6 +49,7 @@ class GnbUlReaderTests(unittest.TestCase):
         self.assertEqual(result["ul_cqi"], 125)
         self.assertEqual(result["tpmi"], 7)
         self.assertTrue(result["tpmi_valid"])
+        self.assertEqual(result["sinr"], 19.5)
         self.assertEqual(result["rv"], 2)
         self.assertEqual(result["ndi"], 1)
         self.assertEqual(result["target_code_rate"], 456)

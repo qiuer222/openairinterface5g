@@ -20,6 +20,8 @@ experiment/
 - `--direction dl`: UE CSV is primary, CSI-RS is the channel, gNB CSV is
   optional supplemental data.
 - All `test_round` groups in the archive pair are analyzed together.
+- UL capacity normalization uses each row's `ul_sinr` in dB. `--snr` is only
+  a fallback for missing UL SINR and the target for DL.
 
 ## Run
 
