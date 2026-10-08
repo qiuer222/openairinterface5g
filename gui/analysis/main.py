@@ -451,6 +451,12 @@ def aggregate_position_level(
         for col in agg_cols:
             if col in ("throughput_mbps", "actual_layers"):
                 continue
+            if col == "max_rsrp_dBm":
+                values = pd.to_numeric(keep[col], errors="coerce")
+                row[col] = (
+                    float(values.max()) if values.notna().any() else float("nan")
+                )
+                continue
             if col in MODE_AGGREGATED_COLUMNS:
                 values = keep[col].dropna()
                 row[col] = (
@@ -579,10 +585,13 @@ def main() -> None:
     if args.direction == "dl" and snr_db is not None:
         noise_power = NOISE_POWER_DEFAULT
 
-    measurements = discover_measurement_sets(
-        args.dataset_dir,
-        direction=args.direction,
-    )
+    try:
+        measurements = discover_measurement_sets(
+            args.dataset_dir,
+            direction=args.direction,
+        )
+    except ValueError as exc:
+        raise SystemExit(f"error: {exc}") from exc
     if not measurements:
         raise SystemExit(f"no measurement sets found under {args.dataset_dir}")
     if len(measurements) != 1:
@@ -693,6 +702,13 @@ def main() -> None:
             corr_position,
             pd.concat([stream_second, stream_position], ignore_index=True),
             output_dir,
+        )
+        plot_timeseries_frame(
+            second_df,
+            output_dir,
+            "second_metrics.png",
+            "Second-Level Metrics",
+            x_column="timestamp",
         )
         plot_timeseries_frame(
             position_df,

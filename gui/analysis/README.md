@@ -20,6 +20,8 @@ experiment/
 - `--direction dl`: UE CSV is primary, CSI-RS is the channel, gNB CSV is
   optional supplemental data.
 - All `test_round` groups in the archive pair are analyzed together.
+- The `gnb_*` and `ue_*` folder timestamps may differ; only the prefixes are
+  used to pair them. Multiple `gnb_*` or `ue_*` folders cause an error.
 - UL capacity normalization uses each row's `ul_sinr` in dB. `--snr` is only
   a fallback for missing UL SINR and the target for DL.
 
@@ -32,17 +34,11 @@ python gui/analysis/main.py \
   --output-dir gui/analysis/analysis_results
 ```
 
-Generate the three-round mock fixture:
-
-```bash
-python gui/analysis/tests/generate_mock_ul_3rounds.py
-```
-
-Then run it:
+Run the checked-in three-round mock fixture:
 
 ```bash
 python gui/analysis/main.py \
-  --dataset-dir /tmp/oai_ul_3rounds \
+  --dataset-dir gui/analysis/test_data/ul_3rounds \
   --direction ul \
   --snr 20 \
   --output-dir gui/analysis/analysis_results
@@ -54,7 +50,8 @@ Use `--no-plots` to skip figure generation.
 
 The output directory contains second-level and position-level CSVs, validation
 files, correlation/regression tables, stream-selection results,
-`figures/position_metrics.png`, other figures, and `final_report.md`.
+`figures/second_metrics.png`, `figures/position_metrics.png`, other figures,
+and `final_report.md`.
 
 Capacity formulas, field definitions, plotting conventions, and all CLI
 options are documented in

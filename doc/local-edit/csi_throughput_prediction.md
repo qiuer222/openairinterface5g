@@ -18,8 +18,10 @@ The experiment root contains one gNB archive and one matching UE archive:
 - `ue_<timestamp>/gui_ue_log_<timestamp>.csv`.
 - `ue_<timestamp>/gui_ue_log_<timestamp>/channel_*.npy`.
 
-The gNB and UE suffixes must match. Each CSV may contain multiple test rounds;
-`test_round` is used as the position ID.
+The gNB and UE folder timestamps do not need to match. The analyzer identifies
+exactly one folder with the `gnb_` prefix and one with the `ue_` prefix. If
+multiple folders use either prefix, it stops with an error. Each CSV may
+contain multiple test rounds; `test_round` is used as the position ID.
 
 - UL mode uses the gNB CSV as the primary record and matches SRS snapshots.
   UE rows are paired by timestamp to provide RSRP and other UE-side fields.
@@ -135,6 +137,8 @@ before generating conclusions.
 For each predictor:
 
 - `rsrp_dBm`
+- `max_rsrp_dBm`
+- `spectrum_efficiency`
 - `shannon_capacity`
 - `svd_capacity`
 - `selected_stream_capacity`
@@ -152,15 +156,11 @@ including confusion matrices and mean absolute error.
 
 Point `--dataset-dir` at the experiment root and pass a single `--direction`:
 
-```bash
-python gui/analysis/tests/generate_mock_ul_3rounds.py
-```
-
-Then run UL analysis:
+Run the checked-in UL mock data:
 
 ```bash
 .venv/bin/python gui/analysis/main.py \
-  --dataset-dir /tmp/oai_ul_3rounds \
+  --dataset-dir gui/analysis/test_data/ul_3rounds \
   --direction ul \
   --output-dir gui/analysis/analysis_results
 ```
@@ -218,16 +218,18 @@ argument:
 ## Time-Series Plot Details
 
 Each run analyzes one direction and all test rounds in the selected archive
-pair. The time-series figures use a single column of five subplots; the
-second-level and position-level figures share the same layout:
+pair. `second_metrics.png` and `position_metrics.png` use the same seven-panel
+layout:
 
 1. Throughput with actual transmission streams on a right-hand dual axis as a
    thin red line. UL uses a solid red line and DL uses a dashed red line.
 2. RSRP with its Pearson correlation labeled `r = xx` on the left and the
    legend on the right.
-3. Shannon capacity with its Pearson correlation labeled `r = xx`.
-4. SVD candidate capacity.
-5. Actual-layer selected stream capacity.
+3. Maximum RSRP over all available antenna RSRP values.
+4. Spectrum efficiency from throughput and the direction-specific RB allocation.
+5. Shannon capacity with its Pearson correlation labeled `r = xx`.
+6. SVD candidate capacity.
+7. Actual-layer selected stream capacity.
 
 The second-level figure uses real timestamps as the x-axis (rendered as a
 sample index), while the position-level figure uses `position_id`. The
@@ -260,6 +262,8 @@ The processed second-level CSV includes:
 | `selected_stream_capacity` | `stream_capacity_k<K>` selected by the actual UL/DL layer count |
 | `normalization_snr_db` | SNR value used to normalize that row's channel |
 | `normalization_snr_source` | `ul_sinr`, `cli_snr`, or `raw` |
+| `max_rsrp_dBm` | Maximum valid per-antenna RSRP for the sample |
+| `spectrum_efficiency` | `throughput_bps / (n_rb * 12 * scs_hz)` |
 
 ZF capacity columns, ZF SINR columns, and ZF validation metrics are not
 generated.
@@ -273,6 +277,7 @@ The default output directory is `gui/analysis/analysis_results/` and includes:
 - `validation_report.csv` and `validation_summary.txt`
 - correlation and regression tables
 - stream-selection summaries and confusion matrices
+- `figures/second_metrics.png`
 - `figures/position_metrics.png`
 - `figures/timeseries_second_*.png`
 - `figures/timeseries_position_*.png`

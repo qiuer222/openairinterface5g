@@ -9,6 +9,8 @@ from scipy import stats
 
 PREDICTORS = [
     "rsrp_dBm",
+    "max_rsrp_dBm",
+    "spectrum_efficiency",
     "shannon_capacity",
     "svd_capacity",
     "selected_stream_capacity",

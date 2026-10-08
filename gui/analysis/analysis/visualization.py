@@ -30,6 +30,8 @@ METRIC_COLORS = {
     "throughput_mbps": "#1f77b4",
     "actual_layers": "#d62728",
     "rsrp_dBm": "#2ca02c",
+    "max_rsrp_dBm": "#8c564b",
+    "spectrum_efficiency": "#7f7f7f",
     "shannon_capacity": "#9467bd",
     "svd_capacity": "#ff7f0e",
     "svd_optimal_stream": "#e377c2",
@@ -40,6 +42,8 @@ METRIC_MARKERS = {
     "throughput_mbps": "o",
     "actual_layers": "s",
     "rsrp_dBm": "^",
+    "max_rsrp_dBm": "v",
+    "spectrum_efficiency": "o",
     "shannon_capacity": "D",
     "svd_capacity": "v",
     "svd_optimal_stream": "P",
@@ -50,6 +54,8 @@ METRIC_NAMES = {
     "throughput_mbps": "Throughput",
     "actual_layers": "Actual layers",
     "rsrp_dBm": "RSRP",
+    "max_rsrp_dBm": "Max antenna RSRP",
+    "spectrum_efficiency": "Spectrum efficiency",
     "shannon_capacity": "Shannon capacity",
     "svd_capacity": "SVD capacity",
     "svd_optimal_stream": "SVD selected layers",
@@ -119,7 +125,8 @@ def plot_scatter_predictors(
     filename: str,
     title: str,
 ) -> None:
-    fig, axes = plt.subplots(2, 2, figsize=(11, 9))
+    rows = (len(PREDICTORS) + 1) // 2
+    fig, axes = plt.subplots(rows, 2, figsize=(11, 4.5 * rows))
     for ax, predictor in zip(axes.flat, PREDICTORS):
         for direction, color in DIRECTION_COLORS.items():
             sub = df[df["direction"] == direction]
@@ -316,6 +323,8 @@ def _plot_timeseries_mode(
     panels = [
         ("throughput_mbps", "actual_layers", "Throughput (Mbps)", "Layers"),
         ("rsrp_dBm", None, "RSRP (dBm)", None),
+        ("max_rsrp_dBm", None, "Max antenna RSRP (dBm)", None),
+        ("spectrum_efficiency", None, "Spectrum efficiency (bit/s/Hz)", None),
         ("shannon_capacity", None, "Shannon capacity (bits/s/Hz)", None),
         ("svd_capacity", None, "SVD capacity (bits/s/Hz)", None),
         (
@@ -404,7 +413,13 @@ def _plot_timeseries_mode(
                 x = _series_x(group, x_column)
                 throughput = pd.to_numeric(group.get("throughput_mbps"), errors="coerce")
 
-                rsrp = pd.to_numeric(group.get("rsrp_dBm"), errors="coerce")
+                rsrp = pd.to_numeric(
+                    group.get(
+                        "max_rsrp_dBm",
+                        group.get("rsrp_dBm"),
+                    ),
+                    errors="coerce",
+                )
                 rsrp_valid = rsrp.dropna()
                 if not rsrp_valid.empty:
                     max_rsrp_idx = rsrp_valid.idxmax()
@@ -483,7 +498,7 @@ def _plot_timeseries_mode(
             ax2.set_ylabel("Transmission streams")
             ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
 
-        if row_idx in (1, 2, 3, 4):
+        if row_idx > 0:
             r = safe_pearson(
                 pd.to_numeric(sub[metric], errors="coerce"),
                 pd.to_numeric(sub["throughput_mbps"], errors="coerce"),

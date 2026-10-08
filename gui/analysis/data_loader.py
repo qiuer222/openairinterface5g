@@ -7,13 +7,23 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
 
 
 TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S_%f"
+RSRP_ANTENNA_COLUMNS = (
+    "rsrp_ant0_dBm",
+    "rsrp_ant1_dBm",
+    "rsrp_ant2_dBm",
+    "rsrp_ant3_dBm",
+    "ue_rsrp_ant0_dBm",
+    "ue_rsrp_ant1_dBm",
+    "ue_rsrp_ant2_dBm",
+    "ue_rsrp_ant3_dBm",
+)
 
 
 @dataclass(frozen=True)
@@ -98,49 +108,53 @@ def _find_log_csv(directory: str, prefix: str) -> str:
     return matches[0]
 
 
-def _discover_archive_pairs(
+def _discover_archive_pair(
     dataset_dir: str,
     direction: Optional[str] = None,
 ) -> List[MeasurementSet]:
     """Discover the new ``gnb_*``/``ue_*`` paired archive layout."""
-    grouped: Dict[str, Dict[str, str]] = {"gnb": {}, "ue": {}}
-    for entry in os.scandir(dataset_dir):
-        if not entry.is_dir():
-            continue
-        match = re.fullmatch(r"(gnb|ue)_(.+)", entry.name)
-        if match:
-            grouped[match.group(1)][match.group(2)] = entry.path
-
-    common_suffixes = sorted(
-        set(grouped["gnb"]).intersection(grouped["ue"])
+    gnb_dirs = sorted(
+        entry.path
+        for entry in os.scandir(dataset_dir)
+        if entry.is_dir() and entry.name.startswith("gnb_")
     )
-    result: List[MeasurementSet] = []
-    for suffix in common_suffixes:
-        gnb_dir = grouped["gnb"][suffix]
-        ue_dir = grouped["ue"][suffix]
-        gnb_csv = _find_log_csv(gnb_dir, "gui_gnb_log_")
-        ue_csv = _find_log_csv(ue_dir, "gui_ue_log_")
-        gnb_srs_dir = os.path.splitext(gnb_csv)[0]
-        ue_csi_dir = os.path.splitext(ue_csv)[0]
-        if direction in (None, "ul") and not _has_channel_files(
-            gnb_srs_dir, "srs_"
-        ):
-            raise ValueError(f"no srs_*.npy files under {gnb_srs_dir}")
-        if direction in (None, "dl") and not _has_channel_files(
-            ue_csi_dir, "channel_"
-        ):
-            raise ValueError(f"no channel_*.npy files under {ue_csi_dir}")
-        result.append(
-            MeasurementSet(
-                name=os.path.basename(os.path.normpath(dataset_dir)) or suffix,
-                direction="",
-                ue_csv=ue_csv,
-                ue_csi_dir=ue_csi_dir,
-                gnb_csv=gnb_csv,
-                gnb_srs_dir=gnb_srs_dir,
-            )
+    ue_dirs = sorted(
+        entry.path
+        for entry in os.scandir(dataset_dir)
+        if entry.is_dir() and entry.name.startswith("ue_")
+    )
+    if not gnb_dirs and not ue_dirs:
+        return []
+    if len(gnb_dirs) != 1 or len(ue_dirs) != 1:
+        raise ValueError(
+            "expected exactly one gnb_* folder and one ue_* folder in "
+            f"{dataset_dir}; found gnb={len(gnb_dirs)}, ue={len(ue_dirs)}"
         )
-    return result
+
+    gnb_dir = gnb_dirs[0]
+    ue_dir = ue_dirs[0]
+    gnb_csv = _find_log_csv(gnb_dir, "gui_gnb_log_")
+    ue_csv = _find_log_csv(ue_dir, "gui_ue_log_")
+    gnb_srs_dir = os.path.splitext(gnb_csv)[0]
+    ue_csi_dir = os.path.splitext(ue_csv)[0]
+    if direction in (None, "ul") and not _has_channel_files(
+        gnb_srs_dir, "srs_"
+    ):
+        raise ValueError(f"no srs_*.npy files under {gnb_srs_dir}")
+    if direction in (None, "dl") and not _has_channel_files(
+        ue_csi_dir, "channel_"
+    ):
+        raise ValueError(f"no channel_*.npy files under {ue_csi_dir}")
+    return [
+        MeasurementSet(
+            name=os.path.basename(os.path.normpath(dataset_dir)) or "measurement",
+            direction="",
+            ue_csv=ue_csv,
+            ue_csi_dir=ue_csi_dir,
+            gnb_csv=gnb_csv,
+            gnb_srs_dir=gnb_srs_dir,
+        )
+    ]
 
 
 def _discover_legacy_measurement_sets(
@@ -184,7 +198,7 @@ def discover_measurement_sets(
     dataset_dir = os.path.abspath(dataset_dir)
     if not os.path.isdir(dataset_dir):
         return []
-    paired = _discover_archive_pairs(dataset_dir, direction=direction)
+    paired = _discover_archive_pair(dataset_dir, direction=direction)
     if paired:
         return paired
     return _discover_legacy_measurement_sets(dataset_dir)
@@ -227,6 +241,42 @@ def _pair_nearest(
         (paired["ts_epoch"] - paired[f"{prefix}_ts_epoch"]).abs() * 1000.0
     )
     return paired
+
+
+def _max_rsrp_dbm(record: dict) -> float:
+    values = []
+    for column in RSRP_ANTENNA_COLUMNS:
+        try:
+            value = float(record.get(column))
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(value) and -190.0 < value < 0.0:
+            values.append(value)
+    return max(values) if values else float("nan")
+
+
+def _spectrum_efficiency(record: dict, direction: str) -> float:
+    try:
+        throughput_bps = float(record.get("throughput_mbps")) * 1e6
+    except (TypeError, ValueError):
+        return float("nan")
+    direction = direction.lower()
+    if direction == "ul":
+        n_rb = record.get("ul_nprb", record.get("nprb"))
+        scs_value = record.get("ul_scs_khz")
+        scs_scale = 1e3
+    else:
+        n_rb = record.get("nprb")
+        scs_value = record.get("scs", record.get("dl_scs_khz"))
+        scs_scale = 1.0 if record.get("scs") is not None else 1e3
+    try:
+        scs_hz = float(scs_value) * scs_scale
+        bandwidth_hz = float(n_rb) * 12.0 * scs_hz
+    except (TypeError, ValueError):
+        return float("nan")
+    if throughput_bps <= 0 or bandwidth_hz <= 0:
+        return float("nan")
+    return throughput_bps / bandwidth_hz
 
 
 def load_measurement_frame(
@@ -285,9 +335,21 @@ def load_measurement_frame(
             axis=1,
         )
 
-    frame = frame.assign(
-        set=measurement.name,
-        direction=direction,
+    derived = pd.DataFrame(
+        {
+            "set": measurement.name,
+            "direction": direction,
+            "max_rsrp_dBm": frame.apply(_max_rsrp_dbm, axis=1),
+            "spectrum_efficiency": frame.apply(
+                lambda record: _spectrum_efficiency(record, direction),
+                axis=1,
+            ),
+        },
+        index=frame.index,
+    )
+    frame = pd.concat(
+        [frame, derived],
+        axis=1,
     )
     frame = assign_position_ids(frame, position_gap_s=position_gap_s)
     return frame
