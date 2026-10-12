@@ -27,6 +27,9 @@ from gui.analysis.capacity.shannon import (
     shannon_capacity_from_eigenvalue_matrix,
     shannon_stream_capacities_from_eigenvalue_matrix,
 )
+from gui.analysis.capacity.covariance import (
+    covariance_capacity_from_channels,
+)
 from gui.analysis.capacity.svd import svd_capacities_from_eigenvalue_matrix
 from gui.analysis.csi_parser import load_channel_and_valid
 from gui.analysis.data_loader import (
@@ -73,6 +76,12 @@ CHANNEL_PREFIXES = {
     "csi": "channel_",
     "srs": "srs_",
 }
+POSITION_GROUP_COLUMNS = [
+    "set",
+    "direction",
+    "position_id",
+    "test_round",
+]
 
 
 def _load_channel_map(
@@ -201,6 +210,49 @@ def _apply_selected_stream_capacity(
         if selected > 0
         else float("nan")
     )
+
+
+def _position_covariance_capacity(
+    second_df: pd.DataFrame,
+    noise_power: float,
+) -> pd.DataFrame:
+    rows = []
+    for keys, group in second_df.groupby(
+        POSITION_GROUP_COLUMNS,
+        dropna=False,
+        sort=True,
+    ):
+        channels = []
+        for record in group.to_dict("records"):
+            channel_file = record.get("channel_file")
+            if not isinstance(channel_file, str) or not channel_file:
+                continue
+            try:
+                snr_db = float(record.get("normalization_snr_db"))
+            except (TypeError, ValueError):
+                snr_db = float("nan")
+            if not np.isfinite(snr_db):
+                snr_db = None
+            channel, _ = load_channel_and_valid(channel_file)
+            channels.append(
+                normalize_channel(
+                    channel,
+                    noise_power=noise_power,
+                    snr_db=snr_db,
+                )
+            )
+        rows.append(
+            {
+                **dict(zip(POSITION_GROUP_COLUMNS, keys)),
+                "position_covariance_capacity": (
+                    covariance_capacity_from_channels(
+                        channels,
+                        noise_power=noise_power,
+                    )
+                ),
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _normalization_snr_db(
@@ -413,7 +465,7 @@ def aggregate_position_level(
     top_ratio: float = 0.5,
 ) -> pd.DataFrame:
     """Aggregate the retained top-throughput samples per position."""
-    group_cols = ["set", "direction", "position_id", "test_round"]
+    group_cols = POSITION_GROUP_COLUMNS
     rows = []
     exclude = {
         "timestamp",
@@ -676,6 +728,11 @@ def main() -> None:
         )
 
     position_df = aggregate_position_level(second_df, top_ratio=args.top_ratio)
+    position_df = position_df.merge(
+        _position_covariance_capacity(second_df, noise_power),
+        on=POSITION_GROUP_COLUMNS,
+        how="left",
+    )
     _write_dataframe(output_dir, "processed_position_level.csv", position_df)
 
     corr_second = correlation_table(second_df, "second")

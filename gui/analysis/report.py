@@ -112,6 +112,8 @@ def write_final_report(
         f"- Channel kind: `{channel_kind}`",
         "- Selected-stream capacity: first actual-layer singular values, "
         "normalized by transmit antennas and noise power",
+        "- Position covariance capacity: mean covariance across second-level "
+        "snapshots per subcarrier, then mean capacity over subcarriers",
         f"- Noise power: `{noise_power}`",
         snr_setting,
         f"- SNR normalization sources: `{snr_sources}`",

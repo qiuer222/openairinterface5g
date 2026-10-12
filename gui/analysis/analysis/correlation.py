@@ -15,6 +15,7 @@ PREDICTORS = [
     "svd_capacity",
     "selected_stream_capacity",
 ]
+POSITION_PREDICTORS = [*PREDICTORS, "position_covariance_capacity"]
 
 
 def safe_pearson(x, y) -> float:
@@ -44,7 +45,10 @@ def correlation_table(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     for direction in sorted(df["direction"].dropna().unique()):
         sub = df[df["direction"] == direction]
         throughput = pd.to_numeric(sub.get("throughput_mbps"), errors="coerce")
-        for predictor in PREDICTORS:
+        predictors = (
+            POSITION_PREDICTORS if mode == "position" else PREDICTORS
+        )
+        for predictor in predictors:
             if predictor not in sub.columns:
                 continue
             values = pd.to_numeric(sub[predictor], errors="coerce")

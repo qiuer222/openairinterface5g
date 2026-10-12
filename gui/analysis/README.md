@@ -53,6 +53,10 @@ files, correlation/regression tables, stream-selection results,
 `figures/second_metrics.png`, `figures/position_metrics.png`, other figures,
 and `final_report.md`.
 
+Position-level results also include `position_covariance_capacity`, computed
+from the mean covariance of all second-level channel snapshots at each
+subcarrier.
+
 Capacity formulas, field definitions, plotting conventions, and all CLI
 options are documented in
 `doc/local-edit/csi_throughput_prediction.md`.

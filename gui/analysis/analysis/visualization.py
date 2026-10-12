@@ -13,7 +13,11 @@ import numpy as np
 import pandas as pd
 from matplotlib.ticker import MaxNLocator
 
-from gui.analysis.analysis.correlation import PREDICTORS, safe_pearson
+from gui.analysis.analysis.correlation import (
+    POSITION_PREDICTORS,
+    PREDICTORS,
+    safe_pearson,
+)
 
 
 DIRECTION_COLORS = {
@@ -36,6 +40,7 @@ METRIC_COLORS = {
     "svd_capacity": "#ff7f0e",
     "svd_optimal_stream": "#e377c2",
     "selected_stream_capacity": "#17becf",
+    "position_covariance_capacity": "#e377c2",
 }
 
 METRIC_MARKERS = {
@@ -48,6 +53,7 @@ METRIC_MARKERS = {
     "svd_capacity": "v",
     "svd_optimal_stream": "P",
     "selected_stream_capacity": "X",
+    "position_covariance_capacity": "P",
 }
 
 METRIC_NAMES = {
@@ -60,6 +66,7 @@ METRIC_NAMES = {
     "svd_capacity": "SVD capacity",
     "svd_optimal_stream": "SVD selected layers",
     "selected_stream_capacity": "Selected-stream capacity",
+    "position_covariance_capacity": "Position covariance capacity",
 }
 
 
@@ -96,6 +103,69 @@ def _series_kwargs(metric: str, x_column: str, linewidth: float) -> dict:
     return kwargs
 
 
+def _positional_max(group: pd.DataFrame, x: pd.Series, metric: str):
+    """Return the index and coordinates of one position-level maximum."""
+    if metric not in group.columns:
+        return None
+    values = pd.to_numeric(group[metric], errors="coerce")
+    valid = values[np.isfinite(values)]
+    if valid.empty:
+        return None
+    index = valid.idxmax()
+    x_value = pd.to_numeric(x.loc[index], errors="coerce")
+    if not np.isfinite(x_value):
+        return None
+    return index, float(x_value), float(valid.loc[index])
+
+
+def _annotate_throughput_point(
+    ax,
+    x_value: float,
+    y_value: float,
+    text: str,
+    color: str,
+    vertical_offset: float,
+) -> None:
+    """Mark a predicted position and place its label inside the axes."""
+    ax.plot(
+        [x_value],
+        [y_value],
+        marker="*",
+        markersize=11,
+        markeredgecolor="white",
+        markeredgewidth=0.6,
+        color=color,
+        linestyle="none",
+        clip_on=False,
+        zorder=6,
+    )
+    x_min, x_max = ax.get_xlim()
+    place_right = x_value < (x_min + x_max) / 2.0
+    ax.annotate(
+        text,
+        (x_value, y_value),
+        textcoords="offset points",
+        xytext=(8 if place_right else -8, vertical_offset),
+        ha="left" if place_right else "right",
+        va="bottom" if vertical_offset >= 0 else "top",
+        fontsize=8,
+        color=color,
+        bbox={
+            "boxstyle": "round,pad=0.25",
+            "facecolor": "white",
+            "edgecolor": color,
+            "alpha": 0.9,
+        },
+        arrowprops={
+            "arrowstyle": "-",
+            "color": color,
+            "linewidth": 0.7,
+        },
+        annotation_clip=False,
+        zorder=7,
+    )
+
+
 def _metric_label(metric: str) -> str:
     return METRIC_NAMES.get(metric, metric)
 
@@ -124,10 +194,11 @@ def plot_scatter_predictors(
     output_dir: str,
     filename: str,
     title: str,
+    predictors: list[str] = PREDICTORS,
 ) -> None:
-    rows = (len(PREDICTORS) + 1) // 2
+    rows = (len(predictors) + 1) // 2
     fig, axes = plt.subplots(rows, 2, figsize=(11, 4.5 * rows))
-    for ax, predictor in zip(axes.flat, PREDICTORS):
+    for ax, predictor in zip(axes.flat, predictors):
         for direction, color in DIRECTION_COLORS.items():
             sub = df[df["direction"] == direction]
             if sub.empty or predictor not in sub.columns:
@@ -144,6 +215,8 @@ def plot_scatter_predictors(
         ax.grid(alpha=0.3)
         if ax is axes.flat[0]:
             ax.legend()
+    for ax in axes.flat[len(predictors) :]:
+        ax.set_axis_off()
     fig.suptitle(title, fontsize=14)
     fig.tight_layout()
     fig.savefig(os.path.join(_figure_dir(output_dir), filename), dpi=200)
@@ -250,12 +323,14 @@ def plot_all(
         output_dir,
         "scatter_second_level.png",
         "Measured Throughput vs Predictors (Per Second)",
+        predictors=PREDICTORS,
     )
     plot_scatter_predictors(
         position_df,
         output_dir,
         "scatter_position_level.png",
         "Measured Throughput vs Predictors (Per Position)",
+        predictors=POSITION_PREDICTORS,
     )
     plot_correlation_comparison(corr_second, corr_position, output_dir)
     plot_stream_selection(stream_summary, output_dir)
@@ -334,6 +409,16 @@ def _plot_timeseries_mode(
             None,
         ),
     ]
+    if "position_covariance_capacity" in df.columns:
+        panels.insert(
+            -1,
+            (
+                "position_covariance_capacity",
+                None,
+                "Position covariance capacity (bits/s/Hz)",
+                None,
+            ),
+        )
     fig, axes = plt.subplots(
         len(panels),
         1,
@@ -413,18 +498,15 @@ def _plot_timeseries_mode(
                 x = _series_x(group, x_column)
                 throughput = pd.to_numeric(group.get("throughput_mbps"), errors="coerce")
 
-                rsrp = pd.to_numeric(
-                    group.get(
-                        "max_rsrp_dBm",
-                        group.get("rsrp_dBm"),
-                    ),
-                    errors="coerce",
+                rsrp_metric = (
+                    "max_rsrp_dBm"
+                    if "max_rsrp_dBm" in group.columns
+                    else "rsrp_dBm"
                 )
-                rsrp_valid = rsrp.dropna()
-                if not rsrp_valid.empty:
-                    max_rsrp_idx = rsrp_valid.idxmax()
-                    max_rsrp_pos = float(x.loc[max_rsrp_idx])
-                    if row_idx in (0, 1):
+                max_rsrp = _positional_max(group, x, rsrp_metric)
+                if max_rsrp is not None:
+                    max_rsrp_idx, max_rsrp_pos, _ = max_rsrp
+                    if metric in ("rsrp_dBm", "max_rsrp_dBm") or row_idx == 0:
                         ax.axvline(
                             max_rsrp_pos,
                             linestyle=":",
@@ -433,31 +515,19 @@ def _plot_timeseries_mode(
                         )
                     if row_idx == 0:
                         throughput_at_rsrp = float(throughput.loc[max_rsrp_idx])
-                        ax.plot(
-                            [max_rsrp_pos],
-                            [throughput_at_rsrp],
-                            marker="o",
-                            markersize=7,
-                            color=METRIC_COLORS["rsrp_dBm"],
-                            linestyle="none",
-                            zorder=5,
-                        )
-                        ax.annotate(
-                            f"{throughput_at_rsrp:.1f}",
-                            (max_rsrp_pos, throughput_at_rsrp),
-                            textcoords="offset points",
-                            xytext=(0, 8),
-                            ha="center",
-                            fontsize=8,
-                            color=METRIC_COLORS["rsrp_dBm"],
+                        _annotate_throughput_point(
+                            ax,
+                            max_rsrp_pos,
+                            throughput_at_rsrp,
+                            f"{throughput_at_rsrp:.1f} Mbps\nmax RSRP",
+                            METRIC_COLORS["rsrp_dBm"],
+                            10,
                         )
 
-                capacity = pd.to_numeric(group.get("shannon_capacity"), errors="coerce")
-                capacity_valid = capacity.dropna()
-                if not capacity_valid.empty:
-                    max_cap_idx = capacity_valid.idxmax()
-                    max_cap_pos = float(x.loc[max_cap_idx])
-                    if row_idx in (0, 2):
+                max_capacity = _positional_max(group, x, "shannon_capacity")
+                if max_capacity is not None:
+                    max_cap_idx, max_cap_pos, _ = max_capacity
+                    if metric == "shannon_capacity" or row_idx == 0:
                         ax.axvline(
                             max_cap_pos,
                             linestyle=":",
@@ -466,33 +536,35 @@ def _plot_timeseries_mode(
                         )
                     if row_idx == 0:
                         throughput_at_cap = float(throughput.loc[max_cap_idx])
-                        ax.plot(
-                            [max_cap_pos],
-                            [throughput_at_cap],
-                            marker="o",
-                            markersize=7,
-                            color=METRIC_COLORS["shannon_capacity"],
-                            linestyle="none",
-                            zorder=5,
+                        throughput_at_rsrp = (
+                            float(throughput.loc[max_rsrp_idx])
+                            if max_rsrp is not None
+                            else float("nan")
                         )
-                        if (
-                            not rsrp_valid.empty
-                            and float(throughput.loc[max_rsrp_idx]) > 0
-                        ):
+                        if np.isfinite(throughput_at_rsrp) and throughput_at_rsrp > 0:
                             enhancement = (
-                                (throughput_at_cap - float(throughput.loc[max_rsrp_idx]))
-                                / float(throughput.loc[max_rsrp_idx])
+                                (throughput_at_cap - throughput_at_rsrp)
+                                / throughput_at_rsrp
                                 * 100.0
                             )
-                            ax.annotate(
-                                f"{throughput_at_cap:.1f} (+{enhancement:.1f}%)",
-                                (max_cap_pos, throughput_at_cap),
-                                textcoords="offset points",
-                                xytext=(0, -12),
-                                ha="center",
-                                fontsize=8,
-                                color=METRIC_COLORS["shannon_capacity"],
+                            capacity_text = (
+                                f"{throughput_at_cap:.1f} Mbps "
+                                f"({enhancement:+.1f}%)\n"
+                                "max Shannon capacity"
                             )
+                        else:
+                            capacity_text = (
+                                f"{throughput_at_cap:.1f} Mbps\n"
+                                "max Shannon capacity"
+                            )
+                        _annotate_throughput_point(
+                            ax,
+                            max_cap_pos,
+                            throughput_at_cap,
+                            capacity_text,
+                            METRIC_COLORS["shannon_capacity"],
+                            -38,
+                        )
 
         if ax2 is not None:
             ax2.set_ylabel("Transmission streams")

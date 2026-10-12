@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from gui.analysis.analysis.correlation import PREDICTORS
+from gui.analysis.analysis.correlation import POSITION_PREDICTORS, PREDICTORS
 
 
 def linear_metrics(x, y) -> dict:
@@ -43,7 +43,10 @@ def regression_table(df: pd.DataFrame, mode: str) -> pd.DataFrame:
     for direction in sorted(df["direction"].dropna().unique()):
         sub = df[df["direction"] == direction]
         throughput = pd.to_numeric(sub.get("throughput_mbps"), errors="coerce")
-        for predictor in PREDICTORS:
+        predictors = (
+            POSITION_PREDICTORS if mode == "position" else PREDICTORS
+        )
+        for predictor in predictors:
             if predictor not in sub.columns:
                 continue
             values = pd.to_numeric(sub[predictor], errors="coerce")

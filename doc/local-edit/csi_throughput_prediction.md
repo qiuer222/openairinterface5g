@@ -122,6 +122,21 @@ This uses the same transmit-power normalization as Shannon capacity:
 each eigenvalue is divided by `N_t * N0`. Unlike SVD candidate capacity, `K`
 is not used again in the denominator.
 
+### Position Covariance Capacity
+
+For each position, all second-level channel snapshots are normalized using
+their row-specific SNR. For each measured subcarrier `k`:
+
+```text
+R(k) = (1/N) sum_n H_n(k) H_n(k)^H
+C_cov(k) = sum_i log2(1 + lambda_i(R(k)) / (N_t * N0))
+C_position_covariance = mean_k C_cov(k)
+```
+
+`N` is the number of second-level samples in the position. This metric uses
+all second samples, before the top-throughput ratio selection, and is stored
+only in the position-level output.
+
 ## Validation
 
 The pipeline validates:
@@ -142,6 +157,7 @@ For each predictor:
 - `shannon_capacity`
 - `svd_capacity`
 - `selected_stream_capacity`
+- `position_covariance_capacity` (position-level only)
 
 the framework computes:
 
@@ -218,8 +234,8 @@ argument:
 ## Time-Series Plot Details
 
 Each run analyzes one direction and all test rounds in the selected archive
-pair. `second_metrics.png` and `position_metrics.png` use the same seven-panel
-layout:
+pair. `second_metrics.png` uses seven panels; `position_metrics.png` adds an
+eighth panel for position covariance capacity:
 
 1. Throughput with actual transmission streams on a right-hand dual axis as a
    thin red line. UL uses a solid red line and DL uses a dashed red line.
@@ -229,7 +245,8 @@ layout:
 4. Spectrum efficiency from throughput and the direction-specific RB allocation.
 5. Shannon capacity with its Pearson correlation labeled `r = xx`.
 6. SVD candidate capacity.
-7. Actual-layer selected stream capacity.
+7. Position covariance capacity, when the input frame is position-level.
+8. Actual-layer selected stream capacity.
 
 The second-level figure uses real timestamps as the x-axis (rendered as a
 sample index), while the position-level figure uses `position_id`. The
@@ -241,11 +258,13 @@ the stream-count series. The position-level figure uses a bolder line width
 (2.5) and markers for capacity metrics while retaining the thin stream line.
 Each metric has a distinct color.
 
-For the position-level figure, the max-RSRP and max-Shannon-capacity positions
-are marked with vertical dotted lines across the subplots. In the throughput
-subplot, dots annotate the throughput value at each of those positions, and the
-max-capacity position also shows the percentage enhancement of its throughput
-relative to the max-RSRP position.
+For the position-level figure, the predicted positions are selected by taking
+the maximum aggregated position-level `max_rsrp_dBm` and
+`shannon_capacity`, not the maximum second-level sample. The two positions are
+marked with vertical dotted lines in the throughput and corresponding metric
+subplots. In the throughput subplot, labeled stars annotate the measured
+throughput at both positions, and the max-capacity annotation also shows the
+percentage change relative to the throughput at the max-RSRP position.
 
 When `--csv` points to one processed CSV, the script splits the data by `set`
 and writes one figure per round. When it is omitted, the script combines the
@@ -264,6 +283,12 @@ The processed second-level CSV includes:
 | `normalization_snr_source` | `ul_sinr`, `cli_snr`, or `raw` |
 | `max_rsrp_dBm` | Maximum valid per-antenna RSRP for the sample |
 | `spectrum_efficiency` | `throughput_bps / (n_rb * 12 * scs_hz)` |
+
+The processed position-level CSV additionally includes:
+
+| Column | Meaning |
+|---|---|
+| `position_covariance_capacity` | Capacity from the mean spatial covariance across all second-level snapshots at each subcarrier, averaged over subcarriers |
 
 ZF capacity columns, ZF SINR columns, and ZF validation metrics are not
 generated.
