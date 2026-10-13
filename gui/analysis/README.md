@@ -22,8 +22,10 @@ experiment/
 - All `test_round` groups in the archive pair are analyzed together.
 - The `gnb_*` and `ue_*` folder timestamps may differ; only the prefixes are
   used to pair them. Multiple `gnb_*` or `ue_*` folders cause an error.
-- UL capacity normalization uses each row's `ul_sinr` in dB. `--snr` is only
-  a fallback for missing UL SINR and the target for DL.
+- Capacity uses a common noise power and raw channel matrices. By default,
+  `N0` is derived from the first position's raw channel power and recorded
+  SINR. Use `--noise-reference-position` to choose another position or
+  `--noise-power` to provide `N0` explicitly.
 
 ## Run
 
@@ -50,12 +52,15 @@ Use `--no-plots` to skip figure generation.
 
 The output directory contains second-level and position-level CSVs, validation
 files, correlation/regression tables, stream-selection results,
-`figures/second_metrics.png`, `figures/position_metrics.png`, other figures,
-and `final_report.md`.
+split throughput/MCS-SE metric figures, other figures, and `final_report.md`.
 
 Position-level results also include `position_covariance_capacity`, computed
 from the mean covariance of all second-level channel snapshots at each
 subcarrier.
+
+Correlations are reported separately for throughput and MCS scheduled SE.
+`mcs_scheduled_se` is calculated per row as
+`TBS / (NPRB * 12 * OFDM_symbols)` and averaged within each position.
 
 Capacity formulas, field definitions, plotting conventions, and all CLI
 options are documented in

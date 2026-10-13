@@ -41,7 +41,11 @@ from gui.analysis.data_loader import (
 from gui.analysis.feature_extraction import (
     extract_channel_features_from_singular_values,
 )
-from gui.analysis.normalization import NOISE_POWER_DEFAULT, normalize_channel
+from gui.analysis.normalization import (
+    NOISE_POWER_DEFAULT,
+    normalize_channel,
+    raw_channel_power,
+)
 from gui.analysis.report import write_final_report
 from gui.analysis.stream_selection import stream_selection_tables
 
@@ -229,18 +233,12 @@ def _position_covariance_capacity(
             channel_file = record.get("channel_file")
             if not isinstance(channel_file, str) or not channel_file:
                 continue
-            try:
-                snr_db = float(record.get("normalization_snr_db"))
-            except (TypeError, ValueError):
-                snr_db = float("nan")
-            if not np.isfinite(snr_db):
-                snr_db = None
             channel, _ = load_channel_and_valid(channel_file)
             channels.append(
                 normalize_channel(
                     channel,
                     noise_power=noise_power,
-                    snr_db=snr_db,
+                    snr_db=None,
                 )
             )
         rows.append(
@@ -257,20 +255,91 @@ def _position_covariance_capacity(
     return pd.DataFrame(rows)
 
 
-def _normalization_snr_db(
-    record: dict,
-    fallback_snr_db: float | None,
-) -> tuple[float | None, str]:
-    if str(record.get("direction", "")).lower() == "ul":
+def _reference_snr(record: dict, direction: str) -> tuple[float, str]:
+    columns = (
+        (("ul_sinr", "position_ul_sinr"),)
+        if direction == "ul"
+        else (
+            ("sinr_dB", "position_ue_sinr"),
+            ("ue_sinr_dB", "position_ue_sinr"),
+            ("dl_sinr", "position_dl_sinr"),
+        )
+    )
+    for column, source in columns:
         try:
-            ul_sinr_db = float(record.get("ul_sinr"))
+            value = float(record.get(column))
         except (TypeError, ValueError):
-            ul_sinr_db = float("nan")
-        if np.isfinite(ul_sinr_db):
-            return ul_sinr_db, "ul_sinr"
-    if fallback_snr_db is not None:
-        return float(fallback_snr_db), "cli_snr"
-    return None, "raw"
+            continue
+        if np.isfinite(value):
+            return value, source
+    return float("nan"), "cli_snr"
+
+
+def _fixed_noise_power(
+    frame: pd.DataFrame,
+    direction: str,
+    reference_position: int | None,
+    fallback_snr_db: float | None,
+) -> tuple[float, dict]:
+    """Derive one noise power from raw channel power and a reference position."""
+    matched = frame[frame["channel_file"].notna()].copy()
+    positions = pd.to_numeric(matched["position_id"], errors="coerce")
+    available = sorted(
+        int(value) for value in positions.dropna().unique().tolist()
+    )
+    if not available:
+        raise ValueError("no position IDs available for noise-power reference")
+
+    selected_position = (
+        available[0] if reference_position is None else int(reference_position)
+    )
+    if selected_position not in available:
+        raise ValueError(
+            f"reference position {selected_position} not found; "
+            f"available positions: {available}"
+        )
+
+    reference = matched[positions == selected_position]
+    powers = []
+    snr_values = []
+    snr_source = "cli_snr"
+    for record in reference.to_dict("records"):
+        channel_file = record.get("channel_file")
+        if not isinstance(channel_file, str) or not channel_file:
+            continue
+        channel, valid = load_channel_and_valid(channel_file)
+        raw = normalize_channel(channel, noise_power=1.0, snr_db=None)
+        power = raw_channel_power(raw, valid_indices=valid)
+        if np.isfinite(power) and power > 0:
+            powers.append(power)
+
+        snr_db, source = _reference_snr(record, direction)
+        if np.isfinite(snr_db):
+            snr_values.append(snr_db)
+            snr_source = source
+
+    if not powers:
+        raise ValueError(
+            f"no valid channel power at reference position {selected_position}"
+        )
+    if snr_values:
+        reference_snr_db = float(np.median(snr_values))
+    elif fallback_snr_db is not None:
+        reference_snr_db = float(fallback_snr_db)
+        snr_source = "cli_snr"
+    else:
+        reference_snr_db = 0.0
+        snr_source = "unity"
+
+    mean_power = float(np.mean(powers))
+    noise_power = mean_power / (10.0 ** (reference_snr_db / 10.0))
+    reference_info = {
+        "position_id": selected_position,
+        "snr_db": reference_snr_db,
+        "source": snr_source,
+        "mean_channel_power": mean_power,
+    }
+    return noise_power, reference_info
 
 
 def _channel_metrics(
@@ -278,12 +347,11 @@ def _channel_metrics(
     valid: np.ndarray,
     noise_power: float,
     max_streams: int,
-    snr_db: float | None,
 ) -> dict:
     """Compute all metrics for one channel using batched SVD over subcarriers."""
     if len(valid) == 0:
         raise ValueError("no valid channel subcarriers")
-    h = normalize_channel(h, noise_power=noise_power, snr_db=snr_db)
+    h = normalize_channel(h, noise_power=noise_power, snr_db=None)
     hv = h[:, :, valid].transpose(2, 0, 1)
     s = np.linalg.svd(hv, compute_uv=False)
     eig = s ** 2
@@ -345,17 +413,15 @@ def process_measurements(
     df: pd.DataFrame,
     noise_power: float,
     max_streams: int = 4,
-    snr_db: float | None = None,
+    noise_reference: dict | None = None,
 ) -> pd.DataFrame:
     """Build second-level rows with features, capacities, and validation data."""
     rows: List[dict] = []
     validation: List[dict] = []
+    noise_reference = noise_reference or {}
 
     for record in df.to_dict("records"):
         channel_file = record.get("channel_file")
-        normalization_snr_db, normalization_snr_source = (
-            _normalization_snr_db(record, snr_db)
-        )
         metadata = {
             key: value
             for key, value in record.items()
@@ -379,8 +445,13 @@ def process_measurements(
             "gnb_match_delta_ms": record.get("gnb_match_delta_ms"),
             "ue_timestamp": record.get("ue_timestamp"),
             "ue_match_delta_ms": record.get("ue_match_delta_ms"),
-            "normalization_snr_db": normalization_snr_db,
-            "normalization_snr_source": normalization_snr_source,
+            "capacity_noise_power": noise_power,
+            "noise_reference_position": noise_reference.get("position_id"),
+            "noise_reference_snr_db": noise_reference.get("snr_db"),
+            "normalization_snr_db": noise_reference.get("snr_db"),
+            "normalization_snr_source": noise_reference.get(
+                "source", "fixed_noise"
+            ),
         }
         row = {
             **metadata,
@@ -403,7 +474,6 @@ def process_measurements(
                 valid,
                 noise_power=noise_power,
                 max_streams=max_streams,
-                snr_db=normalization_snr_db,
             )
 
             features = metrics["features"]
@@ -608,7 +678,20 @@ def main() -> None:
         required=True,
         help="analysis direction for the archive pair: ul or dl",
     )
-    parser.add_argument("--noise-power", type=float, default=NOISE_POWER_DEFAULT)
+    parser.add_argument(
+        "--noise-power",
+        type=float,
+        default=None,
+        help="fixed common noise power. If omitted, derive it from a reference "
+        "position's raw channel power and recorded SINR",
+    )
+    parser.add_argument(
+        "--noise-reference-position",
+        type=int,
+        default=None,
+        help="position_id used to derive the common noise power; defaults to "
+        "the first position",
+    )
     parser.add_argument(
         "--snr",
         type=float,
@@ -633,12 +716,8 @@ def main() -> None:
 
     if not 0.0 < args.top_ratio <= 1.0:
         raise SystemExit("--top-ratio must be in (0, 1]")
-    if args.noise_power <= 0:
+    if args.noise_power is not None and args.noise_power <= 0:
         raise SystemExit("--noise-power must be positive")
-    snr_db = args.snr
-    noise_power = args.noise_power
-    if args.direction == "dl" and snr_db is not None:
-        noise_power = NOISE_POWER_DEFAULT
 
     try:
         measurements = discover_measurement_sets(
@@ -707,11 +786,38 @@ def main() -> None:
             f"{ms.name}: no {channel_kind.upper()}-matched rows"
         )
 
+    if args.noise_power is None:
+        try:
+            noise_power, noise_reference = _fixed_noise_power(
+                frame,
+                direction,
+                args.noise_reference_position,
+                args.snr,
+            )
+        except ValueError as exc:
+            raise SystemExit(f"error: {exc}") from exc
+        logs.append(
+            "  fixed noise power derived from position "
+            f"{noise_reference['position_id']}: "
+            f"N0={noise_power:.6g}, "
+            f"reference {noise_reference['source']}="
+            f"{noise_reference['snr_db']:.3f} dB"
+        )
+    else:
+        noise_power = float(args.noise_power)
+        noise_reference = {
+            "position_id": None,
+            "snr_db": None,
+            "source": "cli_noise_power",
+            "mean_channel_power": None,
+        }
+        logs.append(f"  fixed noise power from CLI: N0={noise_power:.6g}")
+
     second_df, validation_df = process_measurements(
         frame,
         noise_power=noise_power,
         max_streams=4,
-        snr_db=snr_db,
+        noise_reference=noise_reference,
     )
     _write_dataframe(output_dir, "processed_second_level.csv", second_df)
     _write_dataframe(output_dir, "validation_report.csv", validation_df)
@@ -738,8 +844,18 @@ def main() -> None:
     )
     _write_dataframe(output_dir, "processed_position_level.csv", position_df)
 
-    corr_second = correlation_table(second_df, "second")
-    corr_position = correlation_table(position_df, "position")
+    corr_second = correlation_table(second_df, "second", target="throughput")
+    corr_position = correlation_table(position_df, "position", target="throughput")
+    corr_second_mcs = correlation_table(
+        second_df,
+        "second",
+        target="mcs_scheduled_se",
+    )
+    corr_position_mcs = correlation_table(
+        position_df,
+        "position",
+        target="mcs_scheduled_se",
+    )
     regression_second = regression_table(second_df, "second")
     regression_position = regression_table(position_df, "position")
     stream_second, confusion_second = stream_selection_tables(second_df, "second")
@@ -747,6 +863,16 @@ def main() -> None:
 
     _write_dataframe(output_dir, "correlation_second_level.csv", corr_second)
     _write_dataframe(output_dir, "correlation_position_level.csv", corr_position)
+    _write_dataframe(
+        output_dir,
+        "correlation_second_level_mcs_se.csv",
+        corr_second_mcs,
+    )
+    _write_dataframe(
+        output_dir,
+        "correlation_position_level_mcs_se.csv",
+        corr_position_mcs,
+    )
     _write_dataframe(output_dir, "regression_second_level.csv", regression_second)
     _write_dataframe(output_dir, "regression_position_level.csv", regression_position)
     _write_dataframe(output_dir, "stream_selection_second_level.csv", stream_second)
@@ -760,22 +886,42 @@ def main() -> None:
             position_df,
             corr_second,
             corr_position,
+            corr_second_mcs,
+            corr_position_mcs,
             pd.concat([stream_second, stream_position], ignore_index=True),
             output_dir,
         )
         plot_timeseries_frame(
             second_df,
             output_dir,
-            "second_metrics.png",
-            "Second-Level Metrics",
+            "second_throughput_metrics.png",
+            "Second-Level Metrics for Throughput",
             x_column="timestamp",
+            target_metric="throughput_mbps",
         )
         plot_timeseries_frame(
             position_df,
             output_dir,
-            "position_metrics.png",
-            "Position-Level Metrics",
+            "position_throughput_metrics.png",
+            "Position-Level Metrics for Throughput",
             x_column="position_id",
+            target_metric="throughput_mbps",
+        )
+        plot_timeseries_frame(
+            second_df,
+            output_dir,
+            "second_mcs_se_metrics.png",
+            "Second-Level Metrics for MCS Scheduled SE",
+            x_column="timestamp",
+            target_metric="mcs_scheduled_se",
+        )
+        plot_timeseries_frame(
+            position_df,
+            output_dir,
+            "position_mcs_se_metrics.png",
+            "Position-Level Metrics for MCS Scheduled SE",
+            x_column="position_id",
+            target_metric="mcs_scheduled_se",
         )
 
     report_path = write_final_report(
@@ -784,13 +930,15 @@ def main() -> None:
         position_df=position_df,
         corr_second=corr_second,
         corr_position=corr_position,
+        corr_second_mcs=corr_second_mcs,
+        corr_position_mcs=corr_position_mcs,
         regression_second=regression_second,
         regression_position=regression_position,
         stream_second=stream_second,
         stream_position=stream_position,
         validation_summary=validation_summary,
         noise_power=noise_power,
-        snr_db=snr_db,
+        noise_reference=noise_reference,
         top_ratio=args.top_ratio,
         pair_tolerance_ms=args.pair_tolerance_ms,
         channel_kind=channel_kind,

@@ -12,6 +12,8 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 
+from gui.spectral_efficiency import scheduled_spectral_efficiency
+
 
 TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S_%f"
 RSRP_ANTENNA_COLUMNS = (
@@ -255,28 +257,29 @@ def _max_rsrp_dbm(record: dict) -> float:
     return max(values) if values else float("nan")
 
 
-def _spectrum_efficiency(record: dict, direction: str) -> float:
-    try:
-        throughput_bps = float(record.get("throughput_mbps")) * 1e6
-    except (TypeError, ValueError):
-        return float("nan")
-    direction = direction.lower()
+def _mcs_scheduled_se(record: dict, direction: str) -> float:
+    """Return scheduled SE derived from the row's MCS/TBS allocation."""
     if direction == "ul":
-        n_rb = record.get("ul_nprb", record.get("nprb"))
-        scs_value = record.get("ul_scs_khz")
-        scs_scale = 1e3
+        candidates = (
+            ("ul_tbs", "ul_nprb", "ul_nsymb"),
+            ("tbs", "nprb", "nsymb"),
+        )
     else:
-        n_rb = record.get("nprb")
-        scs_value = record.get("scs", record.get("dl_scs_khz"))
-        scs_scale = 1.0 if record.get("scs") is not None else 1e3
-    try:
-        scs_hz = float(scs_value) * scs_scale
-        bandwidth_hz = float(n_rb) * 12.0 * scs_hz
-    except (TypeError, ValueError):
-        return float("nan")
-    if throughput_bps <= 0 or bandwidth_hz <= 0:
-        return float("nan")
-    return throughput_bps / bandwidth_hz
+        candidates = (
+            ("tbs_bits", "nprb", "nsymb"),
+            ("tbs", "nprb", "nsymb"),
+        )
+    for tbs_key, rb_key, symbol_key in candidates:
+        try:
+            tbs = int(float(record.get(tbs_key)))
+            n_prb = int(float(record.get(rb_key)))
+            n_symbols = int(float(record.get(symbol_key)))
+        except (TypeError, ValueError):
+            continue
+        value = scheduled_spectral_efficiency(tbs, n_prb, n_symbols)
+        if value is not None:
+            return float(value)
+    return float("nan")
 
 
 def load_measurement_frame(
@@ -340,8 +343,8 @@ def load_measurement_frame(
             "set": measurement.name,
             "direction": direction,
             "max_rsrp_dBm": frame.apply(_max_rsrp_dbm, axis=1),
-            "spectrum_efficiency": frame.apply(
-                lambda record: _spectrum_efficiency(record, direction),
+            "mcs_scheduled_se": frame.apply(
+                lambda record: _mcs_scheduled_se(record, direction),
                 axis=1,
             ),
         },

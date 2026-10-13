@@ -35,7 +35,7 @@ METRIC_COLORS = {
     "actual_layers": "#d62728",
     "rsrp_dBm": "#2ca02c",
     "max_rsrp_dBm": "#8c564b",
-    "spectrum_efficiency": "#7f7f7f",
+    "mcs_scheduled_se": "#7f7f7f",
     "shannon_capacity": "#9467bd",
     "svd_capacity": "#ff7f0e",
     "svd_optimal_stream": "#e377c2",
@@ -48,7 +48,7 @@ METRIC_MARKERS = {
     "actual_layers": "s",
     "rsrp_dBm": "^",
     "max_rsrp_dBm": "v",
-    "spectrum_efficiency": "o",
+    "mcs_scheduled_se": "o",
     "shannon_capacity": "D",
     "svd_capacity": "v",
     "svd_optimal_stream": "P",
@@ -61,7 +61,7 @@ METRIC_NAMES = {
     "actual_layers": "Actual layers",
     "rsrp_dBm": "RSRP",
     "max_rsrp_dBm": "Max antenna RSRP",
-    "spectrum_efficiency": "Spectrum efficiency",
+    "mcs_scheduled_se": "MCS scheduled SE",
     "shannon_capacity": "Shannon capacity",
     "svd_capacity": "SVD capacity",
     "svd_optimal_stream": "SVD selected layers",
@@ -160,7 +160,7 @@ def _positional_max(group: pd.DataFrame, x: pd.Series, metric: str):
     return index, float(x_value), float(valid.loc[index])
 
 
-def _annotate_throughput_point(
+def _annotate_target_point(
     ax,
     x_value: float,
     y_value: float,
@@ -168,7 +168,7 @@ def _annotate_throughput_point(
     color: str,
     vertical_offset: float,
 ) -> None:
-    """Mark a predicted position and place its label inside the axes."""
+    """Mark a target value at a predicted position."""
     ax.plot(
         [x_value],
         [y_value],
@@ -212,6 +212,13 @@ def _metric_label(metric: str) -> str:
     return METRIC_NAMES.get(metric, metric)
 
 
+def _target_label(target_metric: str) -> str:
+    return {
+        "throughput_mbps": "Throughput",
+        "mcs_scheduled_se": "MCS scheduled SE",
+    }.get(target_metric, target_metric)
+
+
 def _add_correlation_label(ax, r: float) -> None:
     text = f"r = {r:.2f}" if np.isfinite(r) else "r = n/a"
     ax.text(
@@ -237,6 +244,8 @@ def plot_scatter_predictors(
     filename: str,
     title: str,
     predictors: list[str] = PREDICTORS,
+    target: str = "throughput_mbps",
+    target_label: str = "Throughput (Mbps)",
 ) -> None:
     rows = (len(predictors) + 1) // 2
     fig, axes = plt.subplots(rows, 2, figsize=(11, 4.5 * rows))
@@ -246,14 +255,14 @@ def plot_scatter_predictors(
             if sub.empty or predictor not in sub.columns:
                 continue
             x = pd.to_numeric(sub[predictor], errors="coerce").to_numpy(dtype=float)
-            y = pd.to_numeric(sub["throughput_mbps"], errors="coerce").to_numpy(dtype=float)
+            y = pd.to_numeric(sub[target], errors="coerce").to_numpy(dtype=float)
             mask = np.isfinite(x) & np.isfinite(y)
             ax.scatter(x[mask], y[mask], s=22, alpha=0.75, color=color, label=direction)
             xs, ys = _fit_line(x, y)
             if xs is not None:
                 ax.plot(xs, ys, color=color, linestyle="--", alpha=0.85)
         ax.set_xlabel(predictor)
-        ax.set_ylabel("Throughput (Mbps)")
+        ax.set_ylabel(target_label)
         ax.grid(alpha=0.3)
         if ax is axes.flat[0]:
             ax.legend()
@@ -269,6 +278,9 @@ def plot_correlation_comparison(
     corr_second: pd.DataFrame,
     corr_position: pd.DataFrame,
     output_dir: str,
+    filename: str = "correlation_comparison.png",
+    title: str = "Channel Predictor Correlations by Analysis Mode and Direction",
+    ylabel: str = "Pearson correlation with throughput",
 ) -> None:
     combined = pd.concat([corr_second, corr_position], ignore_index=True)
     combined = combined.dropna(subset=["pearson"]).copy()
@@ -285,11 +297,11 @@ def plot_correlation_comparison(
         aggfunc="mean",
     )
     pivot.plot(kind="bar", ax=ax)
-    ax.set_ylabel("Pearson correlation with throughput")
-    ax.set_title("Channel Predictor Correlations by Analysis Mode and Direction")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()
-    fig.savefig(os.path.join(_figure_dir(output_dir), "correlation_comparison.png"), dpi=200)
+    fig.savefig(os.path.join(_figure_dir(output_dir), filename), dpi=200)
     plt.close(fig)
 
 
@@ -357,9 +369,19 @@ def plot_all(
     position_df: pd.DataFrame,
     corr_second: pd.DataFrame,
     corr_position: pd.DataFrame,
+    corr_second_mcs: pd.DataFrame,
+    corr_position_mcs: pd.DataFrame,
     stream_summary: pd.DataFrame,
     output_dir: str,
 ) -> None:
+    mcs_predictors = [
+        predictor for predictor in PREDICTORS
+        if predictor != "mcs_scheduled_se"
+    ]
+    position_mcs_predictors = [
+        predictor for predictor in POSITION_PREDICTORS
+        if predictor != "mcs_scheduled_se"
+    ]
     plot_scatter_predictors(
         second_df,
         output_dir,
@@ -374,7 +396,33 @@ def plot_all(
         "Measured Throughput vs Predictors (Per Position)",
         predictors=POSITION_PREDICTORS,
     )
+    plot_scatter_predictors(
+        second_df,
+        output_dir,
+        "scatter_second_level_mcs_se.png",
+        "MCS Scheduled SE vs Predictors (Per Second)",
+        predictors=mcs_predictors,
+        target="mcs_scheduled_se",
+        target_label="MCS scheduled SE (bit/s/Hz)",
+    )
+    plot_scatter_predictors(
+        position_df,
+        output_dir,
+        "scatter_position_level_mcs_se.png",
+        "MCS Scheduled SE vs Predictors (Per Position)",
+        predictors=position_mcs_predictors,
+        target="mcs_scheduled_se",
+        target_label="MCS scheduled SE (bit/s/Hz)",
+    )
     plot_correlation_comparison(corr_second, corr_position, output_dir)
+    plot_correlation_comparison(
+        corr_second_mcs,
+        corr_position_mcs,
+        output_dir,
+        filename="correlation_mcs_se_comparison.png",
+        title="Channel Predictor Correlations with MCS Scheduled SE",
+        ylabel="Pearson correlation with MCS scheduled SE",
+    )
     plot_stream_selection(stream_summary, output_dir)
     plot_second_vs_position(corr_second, corr_position, output_dir)
 
@@ -387,23 +435,28 @@ def plot_timeseries(
     """Plot time/position series from processed CSV frames without reprocessing."""
     figure_dir = _figure_dir(output_dir)
     paths = []
-
-    paths.append(
-        _plot_timeseries_mode(
-            second_df,
-            os.path.join(figure_dir, "timeseries_second.png"),
-            "Per-Second Time Series",
-            x_column="timestamp",
+    for target, suffix in (
+        ("throughput_mbps", "throughput"),
+        ("mcs_scheduled_se", "mcs_se"),
+    ):
+        paths.append(
+            _plot_timeseries_mode(
+                second_df,
+                os.path.join(figure_dir, f"second_{suffix}_metrics.png"),
+                f"Per-Second Metrics for {_target_label(target)}",
+                x_column="timestamp",
+                target_metric=target,
+            )
         )
-    )
-    paths.append(
-        _plot_timeseries_mode(
-            position_df,
-            os.path.join(figure_dir, "timeseries_position.png"),
-            "Per-Position Mean Time Series",
-            x_column="position_id",
+        paths.append(
+            _plot_timeseries_mode(
+                position_df,
+                os.path.join(figure_dir, f"position_{suffix}_metrics.png"),
+                f"Per-Position Metrics for {_target_label(target)}",
+                x_column="position_id",
+                target_metric=target,
+            )
         )
-    )
     return [path for path in paths if path]
 
 
@@ -413,6 +466,7 @@ def plot_timeseries_frame(
     filename: str,
     title: str,
     x_column: str | None = None,
+    target_metric: str = "throughput_mbps",
 ) -> str | None:
     """Plot one processed CSV frame to a single figure."""
     if x_column is None:
@@ -424,6 +478,7 @@ def plot_timeseries_frame(
         title,
         x_column=x_column,
         directions=directions,
+        target_metric=target_metric,
     )
 
 
@@ -433,15 +488,33 @@ def _plot_timeseries_mode(
     title: str,
     x_column: str,
     directions: List[str] = ("ul", "dl"),
+    target_metric: str = "throughput_mbps",
 ) -> str | None:
     if df.empty:
         return None
 
+    target_label = _target_label(target_metric)
+    target_unit = "Mbps" if target_metric == "throughput_mbps" else "bit/s/Hz"
     panels = [
-        ("throughput_mbps", "actual_layers", "Throughput (Mbps)", "Layers"),
+        (
+            target_metric,
+            "actual_layers",
+            f"{target_label} ({target_unit})",
+            "Layers",
+        ),
         ("rsrp_dBm", None, "RSRP (dBm)", None),
         ("max_rsrp_dBm", None, "Max antenna RSRP (dBm)", None),
-        ("spectrum_efficiency", None, "Spectrum efficiency (bit/s/Hz)", None),
+    ]
+    if target_metric != "mcs_scheduled_se":
+        panels.append(
+            (
+                "mcs_scheduled_se",
+                None,
+                "MCS scheduled SE (bit/s/Hz)",
+                None,
+            )
+        )
+    panels.extend([
         ("shannon_capacity", None, "Shannon capacity (bits/s/Hz)", None),
         ("svd_capacity", None, "SVD capacity (bits/s/Hz)", None),
         (
@@ -450,7 +523,7 @@ def _plot_timeseries_mode(
             "Selected-stream capacity (bits/s/Hz)",
             None,
         ),
-    ]
+    ])
     if "position_covariance_capacity" in df.columns:
         panels.insert(
             -1,
@@ -555,7 +628,10 @@ def _plot_timeseries_mode(
             ):
                 group = group.sort_values(x_column)
                 x = _series_x(group, x_column)
-                throughput = pd.to_numeric(group.get("throughput_mbps"), errors="coerce")
+                target_values = pd.to_numeric(
+                    group.get(target_metric),
+                    errors="coerce",
+                )
 
                 rsrp_metric = (
                     "max_rsrp_dBm"
@@ -573,12 +649,12 @@ def _plot_timeseries_mode(
                             alpha=0.8,
                         )
                     if row_idx == 0:
-                        throughput_at_rsrp = float(throughput.loc[max_rsrp_idx])
-                        _annotate_throughput_point(
+                        target_at_rsrp = float(target_values.loc[max_rsrp_idx])
+                        _annotate_target_point(
                             ax,
                             max_rsrp_pos,
-                            throughput_at_rsrp,
-                            f"{throughput_at_rsrp:.1f} Mbps\nmax RSRP",
+                            target_at_rsrp,
+                            f"{target_at_rsrp:.1f} {target_unit}\nmax RSRP",
                             METRIC_COLORS["rsrp_dBm"],
                             10,
                         )
@@ -594,32 +670,32 @@ def _plot_timeseries_mode(
                             alpha=0.8,
                         )
                     if row_idx == 0:
-                        throughput_at_cap = float(throughput.loc[max_cap_idx])
-                        throughput_at_rsrp = (
-                            float(throughput.loc[max_rsrp_idx])
+                        target_at_cap = float(target_values.loc[max_cap_idx])
+                        target_at_rsrp = (
+                            float(target_values.loc[max_rsrp_idx])
                             if max_rsrp is not None
                             else float("nan")
                         )
-                        if np.isfinite(throughput_at_rsrp) and throughput_at_rsrp > 0:
+                        if np.isfinite(target_at_rsrp) and target_at_rsrp > 0:
                             enhancement = (
-                                (throughput_at_cap - throughput_at_rsrp)
-                                / throughput_at_rsrp
+                                (target_at_cap - target_at_rsrp)
+                                / target_at_rsrp
                                 * 100.0
                             )
                             capacity_text = (
-                                f"{throughput_at_cap:.1f} Mbps "
+                                f"{target_at_cap:.1f} {target_unit} "
                                 f"({enhancement:+.1f}%)\n"
                                 "max Shannon capacity"
                             )
                         else:
                             capacity_text = (
-                                f"{throughput_at_cap:.1f} Mbps\n"
+                                f"{target_at_cap:.1f} {target_unit}\n"
                                 "max Shannon capacity"
                             )
-                        _annotate_throughput_point(
+                        _annotate_target_point(
                             ax,
                             max_cap_pos,
-                            throughput_at_cap,
+                            target_at_cap,
                             capacity_text,
                             METRIC_COLORS["shannon_capacity"],
                             -38,
@@ -636,7 +712,7 @@ def _plot_timeseries_mode(
         if row_idx > 0:
             r = safe_pearson(
                 pd.to_numeric(sub[metric], errors="coerce"),
-                pd.to_numeric(sub["throughput_mbps"], errors="coerce"),
+                pd.to_numeric(sub[target_metric], errors="coerce"),
             )
             _add_correlation_label(ax, r)
 

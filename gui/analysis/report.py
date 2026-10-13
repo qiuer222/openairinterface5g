@@ -56,13 +56,15 @@ def write_final_report(
     position_df: pd.DataFrame,
     corr_second: pd.DataFrame,
     corr_position: pd.DataFrame,
+    corr_second_mcs: pd.DataFrame,
+    corr_position_mcs: pd.DataFrame,
     regression_second: pd.DataFrame,
     regression_position: pd.DataFrame,
     stream_second: pd.DataFrame,
     stream_position: pd.DataFrame,
     validation_summary: dict,
     noise_power: float,
-    snr_db: float | None,
+    noise_reference: dict | None,
     top_ratio: float,
     pair_tolerance_ms: float,
     channel_kind: str,
@@ -76,32 +78,23 @@ def write_final_report(
         )
     else:
         snr_sources = {}
-    if channel_kind == "srs":
-        snr_setting = "- SNR normalization: per-row `ul_sinr` in dB"
-        normalization_note = (
-            "Each SRS channel was normalized so its mean power over valid",
-            "subcarriers equals `noise_power * 10^(ul_sinr/10)`. Missing",
-            "`ul_sinr` values fall back to `--snr` or raw channel power.",
-        )
+    noise_reference = noise_reference or {}
+    reference_position = noise_reference.get("position_id")
+    reference_snr_db = noise_reference.get("snr_db")
+    reference_source = noise_reference.get("source", "unknown")
+    if reference_position is None:
+        reference_setting = "- Noise reference: explicitly supplied `--noise-power`"
     else:
-        snr_setting = (
-            f"- Target SNR normalization: `{snr_db}` dB"
-            if snr_db is not None
-            else "- Target SNR normalization: `off` (raw channel power kept)"
+        reference_setting = (
+            "- Noise reference: "
+            f"position `{reference_position}`, "
+            f"`{reference_source}` = `{_fmt(reference_snr_db)}` dB"
         )
-        normalization_note = (
-            (
-                "Each CSI-RS channel was normalized so its mean power over valid",
-                "subcarriers equals the target SNR with the common fixed noise",
-                "power, removing absolute RX-gain scaling while preserving shape.",
-            )
-            if snr_db is not None
-            else (
-                "The selected channel is used in raw OAI `c16`/FFT units.",
-                "Capacity metrics use the same raw channel power and a common",
-                "fixed noise power; RSRP is kept as an independent predictor.",
-            )
-        )
+    normalization_note = (
+        "Capacity metrics use the raw OAI `c16`/FFT channel matrix after the",
+        "common `1/32768` conversion. The same fixed noise power is applied",
+        "to every second-level and position-level sample.",
+    )
     lines = [
         "# SRS/CSI Channel-Based Throughput Prediction Report",
         "",
@@ -114,9 +107,11 @@ def write_final_report(
         "normalized by transmit antennas and noise power",
         "- Position covariance capacity: mean covariance across second-level "
         "snapshots per subcarrier, then mean capacity over subcarriers",
-        f"- Noise power: `{noise_power}`",
-        snr_setting,
-        f"- SNR normalization sources: `{snr_sources}`",
+        "- MCS scheduled SE: `TBS / (NPRB * 12 * symbols)` per second-level "
+        "sample, averaged within each position",
+        f"- Fixed common noise power: `{noise_power}`",
+        reference_setting,
+        f"- Noise reference SNR sources: `{snr_sources}`",
         f"- Retained throughput ratio per position: `{top_ratio:.0%}`",
         f"- CSV pairing tolerance: `{pair_tolerance_ms:.0f} ms`",
         "",
@@ -129,13 +124,21 @@ def write_final_report(
         f"- Max SVD formula relative error: `{_fmt(validation_summary.get('max_svd_relative_error', float('nan')))}`",
         f"- Result: `{validation_summary.get('result', 'FAIL')}`",
         "",
-        "## Per-Second Correlations",
+        "## Per-Second Correlations with Throughput",
         "",
         _markdown_table(corr_second.set_index("predictor"), "predictor"),
         "",
-        "## Per-Position Correlations",
+        "## Per-Position Correlations with Throughput",
         "",
         _markdown_table(corr_position.set_index("predictor"), "predictor"),
+        "",
+        "## Per-Second Correlations with MCS Scheduled SE",
+        "",
+        _markdown_table(corr_second_mcs.set_index("predictor"), "predictor"),
+        "",
+        "## Per-Position Correlations with MCS Scheduled SE",
+        "",
+        _markdown_table(corr_position_mcs.set_index("predictor"), "predictor"),
         "",
         "## Best Predictor",
         "",
@@ -173,6 +176,8 @@ def write_final_report(
         "- `processed_position_level.csv`",
         "- `validation_report.csv` and `validation_summary.txt`",
         "- `correlation_second_level.csv`, `correlation_position_level.csv`",
+        "- `correlation_second_level_mcs_se.csv`, "
+        "`correlation_position_level_mcs_se.csv`",
         "- `regression_second_level.csv`, `regression_position_level.csv`",
         "- `stream_selection_second_level.csv`, `stream_selection_position_level.csv`",
         "- `stream_confusion_second_level.csv`, `stream_confusion_position_level.csv`",

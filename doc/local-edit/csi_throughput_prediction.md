@@ -6,8 +6,9 @@ This document describes the modular channel throughput prediction framework
 under `gui/analysis/`. The framework reads paired OAI gNB/UE measurement CSVs
 and recorded SRS or CSI-RS channel snapshots, computes Shannon,
 SVD-candidate-stream, and actual-layer-selected stream capacities, and
-compares those metrics with measured throughput. It also evaluates how well
-SVD predicted rank matches the actual scheduled layer count.
+compares those metrics with measured throughput and MCS scheduled spectral
+efficiency. It also evaluates how well SVD predicted rank matches the actual
+scheduled layer count.
 
 ## Input Data
 
@@ -46,31 +47,23 @@ contain multiple test rounds; `test_round` is used as the position ID.
    Canonical fields include `throughput_mbps`, `mcs`, `layers`, and
    `rsrp_dBm`.
 
-4. **Normalization and noise model**
+4. **Noise model**
    `normalization.py` rescales the stored channel from the `c16_t` 16-bit
-   fixed-point integer range to `[-1, 1)` by dividing by `32768` for every
-   sample. This rescale is applied for both normalization modes:
+   fixed-point integer range to `[-1, 1)` by dividing by `32768`. The channel
+   matrix is not normalized per row.
 
-   - **Raw mode (default):** after the `32768` rescale, the channel power is
-     kept as-is. All capacity metrics use the same configurable noise power,
-     defaulting to `1.0` because OAI uses `1` as its CSI-RS zero-noise
-     fallback. RSRP is not converted to SNR.
-   - **`--snr` mode:** each channel is additionally scaled so its mean power
-     over valid measured subcarriers equals `10^(snr/10)` (with the noise power
-     forced back to `1.0`), removing absolute RX-gain scaling while preserving
-     channel shape.
-
-   For UL/SRS analysis, the per-row `ul_sinr` value is used as `snr` when it is
-   available. `ul_sinr` is stored as dB x10 in shared memory and converted to
-   dB by the Python reader. The SRS channel is therefore normalized so:
+   One common noise power is selected from a reference position:
 
    ```text
-   mean_channel_power = noise_power * 10^(ul_sinr_db / 10)
+   N0 = mean_position(raw_channel_power)
+        / 10^(reference_SINR_db / 10)
    ```
 
-   Missing or invalid `ul_sinr` falls back to `--snr`; if that is also unset,
-   the raw c16-rescaled channel power is retained. DL/CSI-RS analysis continues
-   to use the global `--snr` value.
+   For UL/SRS, the reference SINR is normally the median recorded `ul_sinr`
+   of the first position. For DL/CSI-RS, the analyzer uses the recorded UE
+   `sinr_dB`. `--noise-reference-position` selects another position, while
+   `--noise-power` bypasses the derivation with an explicit fixed value. The
+   same `N0` is used for every second-level and position-level channel sample.
 
 5. **Feature extraction**
    `feature_extraction.py` aggregates singular values, eigenvalues, Frobenius
@@ -124,8 +117,8 @@ is not used again in the denominator.
 
 ### Position Covariance Capacity
 
-For each position, all second-level channel snapshots are normalized using
-their row-specific SNR. For each measured subcarrier `k`:
+For each position, all second-level channel snapshots use the same raw channel
+scaling and common noise power. For each measured subcarrier `k`:
 
 ```text
 R(k) = (1/N) sum_n H_n(k) H_n(k)^H
@@ -153,7 +146,7 @@ For each predictor:
 
 - `rsrp_dBm`
 - `max_rsrp_dBm`
-- `spectrum_efficiency`
+- `mcs_scheduled_se`
 - `shannon_capacity`
 - `svd_capacity`
 - `selected_stream_capacity`
@@ -161,12 +154,21 @@ For each predictor:
 
 the framework computes:
 
-- Pearson correlation with throughput.
-- Spearman correlation with throughput.
+- Pearson and Spearman correlation with throughput.
+- Pearson and Spearman correlation with MCS scheduled SE.
 - Linear regression `R2`, `MAE`, and `RMSE`.
 
 It also computes SVD stream-selection accuracy against actual layers,
 including confusion matrices and mean absolute error.
+
+`mcs_scheduled_se` is computed per second-level row from the scheduled
+allocation:
+
+```text
+mcs_scheduled_se = TBS / (NPRB * 12 * OFDM_symbols)
+```
+
+The position-level value is the mean of its retained second-level rows.
 
 ## Script Usage
 
@@ -193,21 +195,20 @@ For a DL experiment, pass that root and `--direction dl`:
 Exactly one matching gNB/UE archive pair must be present per invocation. All
 `test_round` values in that pair are processed together.
 
-Optional `--snr` supplies a fallback normalization target for UL rows missing
-`ul_sinr` and the normalization target for DL CSI-RS analysis:
+The common noise power is derived from the first position by default. Select a
+specific reference position with:
 
 ```bash
 .venv/bin/python gui/analysis/main.py \
-  --dataset-dir /path/to/dl_experiment \
-  --direction dl \
-  --snr 20 \
+  --dataset-dir /path/to/experiment \
+  --direction ul \
+  --noise-reference-position 3 \
   --output-dir gui/analysis/analysis_results
 ```
 
-For DL, setting `--snr` forces noise power to `1.0`; without it, raw
-`c16`/32768-rescaled channel power is used. For UL, `ul_sinr` takes priority
-and `--noise-power` remains the common noise power in the normalization
-target.
+Alternatively, provide an explicit common noise power with `--noise-power`.
+`--snr` is only a fallback reference SINR when no recorded `ul_sinr` or UE
+`sinr_dB` is available.
 
 Plot time series directly from existing processed CSVs:
 
@@ -234,24 +235,33 @@ argument:
 ## Time-Series Plot Details
 
 Each run analyzes one direction and all test rounds in the selected archive
-pair. `second_metrics.png` uses seven panels; `position_metrics.png` adds an
-eighth panel for position covariance capacity:
+pair. Metrics are plotted in two prediction groups:
 
-1. Throughput with actual transmission streams on a right-hand dual axis as a
-   thin red line. UL uses a solid red line and DL uses a dashed red line.
+- Throughput prediction:
+  `second_throughput_metrics.png`, `position_throughput_metrics.png`.
+- MCS scheduled-SE prediction:
+  `second_mcs_se_metrics.png`, `position_mcs_se_metrics.png`.
+
+Within each group, the selected target is plotted first, followed by the
+predictor metrics:
+
+1. The selected target, either throughput or MCS scheduled SE, with actual
+   transmission streams on a right-hand dual axis as a thin red line. UL uses
+   a solid red line and DL uses a dashed red line.
 2. RSRP with its Pearson correlation labeled `r = xx` on the left and the
    legend on the right.
 3. Maximum RSRP over all available antenna RSRP values.
-4. Spectrum efficiency from throughput and the direction-specific RB allocation.
+4. MCS scheduled SE from TBS, allocated PRBs, and OFDM symbols, when the target
+   is throughput.
 5. Shannon capacity with its Pearson correlation labeled `r = xx`.
 6. SVD candidate capacity.
 7. Position covariance capacity, when the input frame is position-level.
 8. Actual-layer selected stream capacity.
 
-The second-level figure uses real timestamps as the x-axis (rendered as a
-sample index), while the position-level figure uses `position_id`. The
-throughput panel always includes the actual transmission-stream count on a
-thin red right-hand axis: solid for UL and dashed for DL.
+The second-level figures use real timestamps as the x-axis (rendered as a
+sample index), while the position-level figures use `position_id`. Every target
+panel includes the actual transmission-stream count on a thin red right-hand
+axis: solid for UL and dashed for DL.
 
 The second-level figure uses line width 1 for capacity/throughput and 0.5 for
 the stream-count series. The position-level figure uses a bolder line width
@@ -265,10 +275,10 @@ distinct color.
 For the position-level figure, the predicted positions are selected by taking
 the maximum aggregated position-level `max_rsrp_dBm` and
 `shannon_capacity`, not the maximum second-level sample. The two positions are
-marked with vertical dotted lines in the throughput and corresponding metric
-subplots. In the throughput subplot, labeled stars annotate the measured
-throughput at both positions, and the max-capacity annotation also shows the
-percentage change relative to the throughput at the max-RSRP position.
+marked with vertical dotted lines in the target and corresponding metric
+subplots. In the target subplot, labeled stars annotate the target value at
+both positions, and the max-capacity annotation also shows the percentage
+change relative to the target at the max-RSRP position.
 
 When `--csv` points to one processed CSV, the script splits the data by `set`
 and writes one figure per round. When it is omitted, the script combines the
@@ -283,11 +293,13 @@ The processed second-level CSV includes:
 | `stream_capacity_k1` ... `stream_capacity_k4` | Cumulative Shannon-style capacity using the first K singular values |
 | `selected_stream_count` | Actual layer count used as K, clamped to the available channel rank |
 | `selected_stream_capacity` | `stream_capacity_k<K>` selected by the actual UL/DL layer count |
-| `normalization_snr_db` | SNR value used to normalize that row's channel |
-| `normalization_snr_source` | `ul_sinr`, `cli_snr`, or `raw` |
+| `capacity_noise_power` | Fixed common noise power `N0` used by every capacity metric |
+| `noise_reference_position` | Position used to derive `N0` |
+| `noise_reference_snr_db` | Reference SINR used to derive `N0` |
+| `normalization_snr_source` | Reference SINR source; retained for compatibility |
 | `nb_tx_antennas` | Number of transmit antenna ports in the channel matrix |
 | `max_rsrp_dBm` | Maximum valid per-antenna RSRP for the sample |
-| `spectrum_efficiency` | `throughput_bps / (n_rb * 12 * scs_hz)` |
+| `mcs_scheduled_se` | `TBS / (NPRB * 12 * OFDM_symbols)` for the row |
 
 The processed position-level CSV additionally includes:
 
@@ -306,14 +318,18 @@ The default output directory is `gui/analysis/analysis_results/` and includes:
 - `processed_position_level.csv`
 - `validation_report.csv` and `validation_summary.txt`
 - correlation and regression tables
+- `correlation_second_level_mcs_se.csv` and
+  `correlation_position_level_mcs_se.csv`
 - stream-selection summaries and confusion matrices
-- `figures/second_metrics.png`
-- `figures/position_metrics.png`
+- `figures/second_throughput_metrics.png`
+- `figures/position_throughput_metrics.png`
+- `figures/second_mcs_se_metrics.png`
+- `figures/position_mcs_se_metrics.png`
 - `figures/timeseries_second_*.png`
 - `figures/timeseries_position_*.png`
 - `figures/scatter_*.png`
 - `final_report.md`
 
-`position_metrics.png` is generated automatically by the main analysis
+All four metric figures are generated automatically by the main analysis
 pipeline. The additional `timeseries_*.png` files can be regenerated with
 `plot_timeseries.py`.

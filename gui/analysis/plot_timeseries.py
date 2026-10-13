@@ -49,15 +49,21 @@ def main() -> None:
         for set_name in sorted(frame["set"].dropna().unique()):
             safe_set = re.sub(r"[^A-Za-z0-9_-]+", "_", str(set_name))
             subset = frame[frame["set"] == set_name]
-            path = plot_timeseries_frame(
-                subset,
-                args.output_dir,
-                f"timeseries_{mode}_{safe_set}.png",
-                f"Per-{mode.capitalize()} Time Series - {set_name}",
-                x_column=x_column,
-            )
-            if path:
-                print(f"wrote {path}")
+            for target, suffix in (
+                ("throughput_mbps", "throughput"),
+                ("mcs_scheduled_se", "mcs_se"),
+            ):
+                path = plot_timeseries_frame(
+                    subset,
+                    args.output_dir,
+                    f"timeseries_{mode}_{suffix}_{safe_set}.png",
+                    f"Per-{mode.capitalize()} {suffix.replace('_', ' ').title()} "
+                    f"Metrics - {set_name}",
+                    x_column=x_column,
+                    target_metric=target,
+                )
+                if path:
+                    print(f"wrote {path}")
         return
 
     second = pd.read_csv(args.second_level)
