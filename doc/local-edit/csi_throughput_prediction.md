@@ -255,8 +255,12 @@ thin red right-hand axis: solid for UL and dashed for DL.
 
 The second-level figure uses line width 1 for capacity/throughput and 0.5 for
 the stream-count series. The position-level figure uses a bolder line width
-(2.5) and markers for capacity metrics while retaining the thin stream line.
-Each metric has a distinct color.
+(2.5) and markers for capacity metrics. Its stream-count series is drawn as a
+horizontal segment at each position `i`, spanning
+`[max(i - 0.5, min(position_id)), min(i + 0.5, max(position_id))]`.
+Adjacent segments are connected in position order, and the right axis is
+limited to `0..nb_tx_ant` with only those two ticks. Each metric has a
+distinct color.
 
 For the position-level figure, the predicted positions are selected by taking
 the maximum aggregated position-level `max_rsrp_dBm` and
@@ -281,6 +285,7 @@ The processed second-level CSV includes:
 | `selected_stream_capacity` | `stream_capacity_k<K>` selected by the actual UL/DL layer count |
 | `normalization_snr_db` | SNR value used to normalize that row's channel |
 | `normalization_snr_source` | `ul_sinr`, `cli_snr`, or `raw` |
+| `nb_tx_antennas` | Number of transmit antenna ports in the channel matrix |
 | `max_rsrp_dBm` | Maximum valid per-antenna RSRP for the sample |
 | `spectrum_efficiency` | `throughput_bps / (n_rb * 12 * scs_hz)` |
 

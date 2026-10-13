@@ -60,6 +60,7 @@ MODE_AGGREGATED_COLUMNS = {
     "new_data_indicator",
     "normalization_snr_source",
     "iperf_direction",
+    "nb_tx_antennas",
     "ri",
     "rv",
     "selected_stream_count",
@@ -190,6 +191,7 @@ def _empty_channel_metrics(max_streams: int) -> dict:
             "svd_optimal_stream": 0,
             "selected_stream_capacity": float("nan"),
             "selected_stream_count": 0,
+            "nb_tx_antennas": float("nan"),
         }
     )
     for k in range(1, max_streams + 1):
@@ -258,7 +260,7 @@ def _position_covariance_capacity(
 def _normalization_snr_db(
     record: dict,
     fallback_snr_db: float | None,
-) -> tuple[float, str]:
+) -> tuple[float | None, str]:
     if str(record.get("direction", "")).lower() == "ul":
         try:
             ul_sinr_db = float(record.get("ul_sinr"))
@@ -268,7 +270,7 @@ def _normalization_snr_db(
             return ul_sinr_db, "ul_sinr"
     if fallback_snr_db is not None:
         return float(fallback_snr_db), "cli_snr"
-    return float("nan"), "raw"
+    return None, "raw"
 
 
 def _channel_metrics(
@@ -395,6 +397,7 @@ def process_measurements(
             h, valid = load_channel_and_valid(channel_file)
             if len(valid) == 0:
                 raise ValueError("no valid channel subcarriers")
+            row["nb_tx_antennas"] = int(h.shape[1])
             metrics = _channel_metrics(
                 h,
                 valid,

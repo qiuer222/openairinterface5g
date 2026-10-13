@@ -103,6 +103,48 @@ def _series_kwargs(metric: str, x_column: str, linewidth: float) -> dict:
     return kwargs
 
 
+def _layer_step_coordinates(
+    x: pd.Series,
+    layers: pd.Series,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return connected horizontal layer segments centered on positions."""
+    position = pd.to_numeric(x, errors="coerce").to_numpy(dtype=float)
+    layer = pd.to_numeric(layers, errors="coerce").to_numpy(dtype=float)
+    valid = np.isfinite(position) & np.isfinite(layer)
+    position = position[valid]
+    layer = layer[valid]
+    if len(position) == 0:
+        return np.empty(0), np.empty(0)
+
+    order = np.argsort(position, kind="stable")
+    position = position[order]
+    layer = layer[order]
+    position_min = float(position[0])
+    position_max = float(position[-1])
+
+    x_values = []
+    y_values = []
+    for position_value, layer_value in zip(position, layer):
+        start = max(position_value - 0.5, position_min)
+        end = min(position_value + 0.5, position_max)
+        if x_values and start < x_values[-1]:
+            start = x_values[-1]
+        x_values.extend([start, end])
+        y_values.extend([layer_value, layer_value])
+    return np.asarray(x_values), np.asarray(y_values)
+
+
+def _tx_antenna_count(df: pd.DataFrame) -> int | None:
+    """Read the transmit-antenna count recorded by the analysis pipeline."""
+    if "nb_tx_antennas" not in df.columns:
+        return None
+    values = pd.to_numeric(df["nb_tx_antennas"], errors="coerce")
+    values = values[np.isfinite(values) & (values > 0)]
+    if values.empty:
+        return None
+    return int(round(float(values.max())))
+
+
 def _positional_max(group: pd.DataFrame, x: pd.Series, metric: str):
     """Return the index and coordinates of one position-level maximum."""
     if metric not in group.columns:
@@ -429,6 +471,9 @@ def _plot_timeseries_mode(
 
     is_position = x_column == "position_id"
     primary_lw = 2.5 if is_position else 1.0
+    tx_antenna_count = _tx_antenna_count(
+        df[df["direction"].isin(directions)]
+    )
 
     for row_idx, (metric, secondary_metric, ylabel, secondary_ylabel) in enumerate(panels):
         ax = axes[row_idx][0]
@@ -475,17 +520,31 @@ def _plot_timeseries_mode(
                     direction,
                     {"color": "#d62728", "linestyle": "-"},
                 )
-                ax2.plot(
-                    x,
-                    values,
-                    label=(
-                        f"{set_name} "
-                        f"{direction.upper() if direction else ''} streams"
-                    ),
-                    linewidth=0.5,
-                    drawstyle="steps-post",
-                    **layer_style,
+                layer_label = (
+                    f"{set_name} "
+                    f"{direction.upper() if direction else ''} streams"
                 )
+                if is_position:
+                    layer_x, layer_y = _layer_step_coordinates(
+                        group[x_column],
+                        values,
+                    )
+                    ax2.plot(
+                        layer_x,
+                        layer_y,
+                        label=layer_label,
+                        linewidth=0.5,
+                        **layer_style,
+                    )
+                else:
+                    ax2.plot(
+                        x,
+                        values,
+                        label=layer_label,
+                        linewidth=0.5,
+                        drawstyle="steps-post",
+                        **layer_style,
+                    )
 
         ax.set_ylabel(ylabel)
         ax.grid(alpha=0.3)
@@ -568,7 +627,11 @@ def _plot_timeseries_mode(
 
         if ax2 is not None:
             ax2.set_ylabel("Transmission streams")
-            ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
+            if is_position and tx_antenna_count is not None:
+                ax2.set_ylim(0, tx_antenna_count)
+                ax2.set_yticks([0, tx_antenna_count])
+            else:
+                ax2.yaxis.set_major_locator(MaxNLocator(integer=True))
 
         if row_idx > 0:
             r = safe_pearson(
