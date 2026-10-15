@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <strings.h>
 
 #include "openair2/RRC/NR/rrc_gNB_UE_context.h"
 #include "openair2/LAYER2/NR_MAC_gNB/nr_mac_gNB.h"
@@ -402,6 +403,45 @@ static int set_pusch_target_snr(char *buf, int debug, telnet_printfunc_t prnt)
   return 0;
 }
 
+static int set_layers(char *buf, int debug, telnet_printfunc_t prnt)
+{
+  UNUSED(debug);
+  char direction[8];
+  char value[16];
+  char extra;
+  if (!buf || sscanf(buf, "%7s %15s %c", direction, value, &extra) != 2)
+    ERROR_MSG_RET("Usage: ci set_layers ul <1..4|auto>\n");
+
+  if (strcasecmp(direction, "ul") != 0)
+    ERROR_MSG_RET("Invalid direction '%s'; use ci set_layers ul <1..4|auto>\n", direction);
+
+  int layers;
+  if (strcasecmp(value, "auto") == 0) {
+    layers = 0;
+  } else {
+    char *end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno || !end || *end != '\0' || parsed < 1 || parsed > NR_MAX_NB_LAYERS)
+      ERROR_MSG_RET("Invalid UL layer count '%s'; expected 1..%d or auto\n", value, NR_MAX_NB_LAYERS);
+    layers = parsed;
+  }
+
+  if (!RC.nrmac || RC.nb_nr_macrlc_inst <= 0)
+    ERROR_MSG_RET("No NR MAC instance available\n");
+
+  for (int i = 0; i < RC.nb_nr_macrlc_inst; i++) {
+    if (nr_mac_set_ul_layers_override(RC.nrmac[i], layers) != 0)
+      ERROR_MSG_RET("Could not update UL layer override for MAC instance %d\n", i);
+  }
+
+  if (layers == 0)
+    prnt("UL layers override cleared (auto)\n");
+  else
+    prnt("UL layers override set to %d (effective layers are clamped per UE)\n", layers);
+  return 0;
+}
+
 static telnetshell_cmddef_t cicmds[] = {
     {"get_single_rnti", "", get_single_rnti},
     {"force_reestab", "[rnti(hex,opt)]", trigger_reestab},
@@ -414,6 +454,7 @@ static telnetshell_cmddef_t cicmds[] = {
     {"trigger_bwp_switch", "newBWPId [rnti(hex,opt)]", trigger_bwp_switch},
     {"trigger_n2_ho", "[neighbour_pci(uint32_t),ueId(uint32_t)]", rrc_gNB_trigger_n2_ho},
     {"set_pusch_target_snr", "[somelongSNR(dec)]", set_pusch_target_snr},
+    {"set_layers", "ul <1..4|auto>", set_layers},
     {"pdu_session_release", "[gNB_ue_ngap_id(int,opt)]", trigger_ngap_pdu_session_release},
     {"", "", NULL},
 };

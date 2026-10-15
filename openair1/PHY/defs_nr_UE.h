@@ -229,6 +229,8 @@ typedef struct {
   c16_t **csi_rs_generated_signal;
   bool csi_im_meas_computed;
   uint32_t interference_plus_noise_power;
+  /// Runtime CSI-RS rank override, 0 means use the measured rank.
+  uint8_t dl_layers_override;
 } nr_csi_info_t;
 
 typedef struct {

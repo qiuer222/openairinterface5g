@@ -9,4 +9,7 @@
 
 extern PHY_VARS_NR_UE ***nrPHY_vars_UE_g;
 
+int nr_csi_set_dl_layers_override(PHY_VARS_NR_UE *ue, int layers);
+uint8_t nr_csi_get_dl_layers_override(const PHY_VARS_NR_UE *ue);
+
 #endif

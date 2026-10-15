@@ -1276,6 +1276,9 @@ typedef struct gNB_MAC_INST_s {
   /// Optional state persistence for scheduling policies.
   void *sched_stateful_data;
 
+  /// Runtime PUSCH layer override, 0 means use the SRS-computed rank.
+  int ul_layers_override;
+
   nr_mac_config_t radio_config;
   nr_rlc_configuration_t rlc_config;
 

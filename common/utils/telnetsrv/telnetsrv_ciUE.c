@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <strings.h>
 #include "openair2/LAYER2/NR_MAC_UE/mac_defs.h"
 #include "openair2/LAYER2/NR_MAC_UE/mac_proto.h"
 #include "openair2/RRC/NR_UE/rrc_proto.h"
@@ -175,6 +176,61 @@ static int add_pdu_session(char *buf, int debug, telnet_printfunc_t prnt)
   return 0;
 }
 
+static int set_layers(char *buf, int debug, telnet_printfunc_t prnt)
+{
+  UNUSED(debug);
+  char direction[8];
+  char value[16];
+  char extra;
+  if (!buf || sscanf(buf, "%7s %15s %c", direction, value, &extra) != 2)
+    ERROR_MSG_RET("Usage: ciUE set_layers dl <1..4|auto>\n");
+
+  if (strcasecmp(direction, "dl") != 0)
+    ERROR_MSG_RET("Invalid direction '%s'; use ciUE set_layers dl <1..4|auto>\n", direction);
+
+  int layers;
+  if (strcasecmp(value, "auto") == 0) {
+    layers = 0;
+  } else {
+    char *end = NULL;
+    errno = 0;
+    long parsed = strtol(value, &end, 10);
+    if (errno || !end || *end != '\0' || parsed < 1 || parsed > NR_MAX_NB_LAYERS)
+      ERROR_MSG_RET("Invalid DL layer count '%s'; expected 1..%d or auto\n", value, NR_MAX_NB_LAYERS);
+    layers = parsed;
+  }
+
+  PHY_VARS_NR_UE *ue = (nrPHY_vars_UE_g && nrPHY_vars_UE_g[0]) ? nrPHY_vars_UE_g[0][0] : NULL;
+  if (!ue || !ue->nr_csi_info)
+    ERROR_MSG_RET("UE PHY is not initialized\n");
+
+  int effective_layers = layers;
+  if (layers > 0) {
+    NR_UE_MAC_INST_t *mac = get_mac_inst(0);
+    if (!mac)
+      ERROR_MSG_RET("UE MAC is not initialized\n");
+
+    long max_supported_layers = mac->sc_info.maxMIMO_Layers_PDSCH ? *mac->sc_info.maxMIMO_Layers_PDSCH
+                                                                  : (long)mac->uecap_maxMIMO_PDSCH_layers;
+    if (max_supported_layers <= 0)
+      ERROR_MSG_RET("PDSCH MIMO configuration is not available\n");
+
+    // The current CSI-RS RI/PMI implementation supports one and two layers.
+    effective_layers = min(layers, min((int)max_supported_layers, 2));
+  }
+
+  if (nr_csi_set_dl_layers_override(ue, effective_layers) != 0)
+    ERROR_MSG_RET("Could not update DL layer override\n");
+
+  if (effective_layers == 0)
+    prnt("DL layers override cleared (auto)\n");
+  else if (effective_layers != layers)
+    prnt("DL layers override requested %d, effective %d (clamped by UE configuration/implementation)\n", layers, effective_layers);
+  else
+    prnt("DL layers override set to %d\n", effective_layers);
+  return 0;
+}
+
 /* Telnet shell command definitions */
 static telnetshell_cmddef_t cicmds[] = {
   {"sync_state", "[UE_ID(int,opt)]", get_sync_state},
@@ -184,6 +240,7 @@ static telnetshell_cmddef_t cicmds[] = {
   {"deregistration", "", force_deregistration},
   {"get_max_dl_toa", "[ant]", get_dl_toa},
   {"add_pdu_session", "[PDUSessionID(int)],[UE_ID(int,opt)]", add_pdu_session},
+  {"set_layers", "dl <1..4|auto>", set_layers},
   {"", "", NULL},
 };
 
@@ -196,4 +253,3 @@ static telnetshell_vardef_t civars[] = {
 void add_ciUE_cmds(void) {
   add_telnetcmd("ciUE", civars, cicmds);
 }
-

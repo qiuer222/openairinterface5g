@@ -37,6 +37,23 @@ Below are  examples of telnet sessions:
 *  [log command](telnetlog.md)
 *  [measur command](telnetmeasur.md)
 
+# runtime MIMO layer override
+For NR, the gNB CI module can override the rank used for subsequent PUSCH transmissions after SRS measurement:
+
+```bash
+ci set_layers ul <1..4|auto>
+```
+
+The nrUE CI module can override the RI used for subsequent CSI-RS reports before PMI and CQI are computed:
+
+```bash
+ciUE set_layers dl <1..4|auto>
+```
+
+The override is process-wide and applies to new transmissions; HARQ retransmissions keep their original rank. `auto`
+restores the measured SRS/CSI-RS rank. Requested ranks are clamped to the UE configuration, antenna/SRS ports, and the
+implemented CSI/TPMI capabilities.
+
 # telnet server parameters
 The telnet server is using the [oai configuration module](../../../../common/config/DOC/config/rtusage.md). Telnet parameters must be specified in the `telnetsrv` section. Some parameters can be modified via the telnet telnet server command, as specified in the last column of the following table.
 

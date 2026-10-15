@@ -1653,6 +1653,24 @@ void handle_nr_srs_measurements(const module_id_t module_id,
       nr_srs_ri_computation(&nr_srs_channel_iq_matrix, current_BWP, &sched_ctrl->srs_feedback.ul_ri);
       stop_meas(&nr_mac->nr_srs_ri_computation_timer);
 
+      if (nrmac->ul_layers_override > 0) {
+        int max_layers = nrmac->radio_config.pusch_AntennaPorts;
+        if (current_BWP->pusch_Config && current_BWP->pusch_Config->maxRank)
+          max_layers = min(max_layers, (int)*current_BWP->pusch_Config->maxRank);
+        max_layers = min(max_layers, (int)nr_srs_channel_iq_matrix.num_ue_srs_ports);
+        max_layers = min(max_layers, (int)nr_srs_channel_iq_matrix.num_gnb_antenna_elements);
+        max_layers = max(1, min(max_layers, NR_MAX_NB_LAYERS));
+        const int effective_layers = min(nrmac->ul_layers_override, max_layers);
+        sched_ctrl->srs_feedback.ul_ri = effective_layers - 1;
+        LOG_D(NR_MAC,
+              "[UE %04x] UL layers override: requested %d, effective %d (SRS ports %u, gNB elements %u)\n",
+              UE->rnti,
+              nrmac->ul_layers_override,
+              effective_layers,
+              nr_srs_channel_iq_matrix.num_ue_srs_ports,
+              nr_srs_channel_iq_matrix.num_gnb_antenna_elements);
+      }
+
       start_meas(&nr_mac->nr_srs_tpmi_computation_timer);
       sched_ctrl->srs_feedback.tpmi = nr_srs_tpmi_estimation(current_BWP->pusch_Config,
                                                              current_BWP->transform_precoding,

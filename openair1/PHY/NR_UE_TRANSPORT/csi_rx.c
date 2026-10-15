@@ -29,6 +29,23 @@
 
 extern openair0_config_t openair0_cfg[MAX_CARDS];
 
+int nr_csi_set_dl_layers_override(PHY_VARS_NR_UE *ue, int layers)
+{
+  if (!ue || !ue->nr_csi_info || layers < 0 || layers > NR_MAX_NB_LAYERS)
+    return -1;
+
+  __atomic_store_n(&ue->nr_csi_info->dl_layers_override, (uint8_t)layers, __ATOMIC_RELEASE);
+  return 0;
+}
+
+uint8_t nr_csi_get_dl_layers_override(const PHY_VARS_NR_UE *ue)
+{
+  if (!ue || !ue->nr_csi_info)
+    return 0;
+
+  return __atomic_load_n(&ue->nr_csi_info->dl_layers_override, __ATOMIC_ACQUIRE);
+}
+
 void nr_det_A_MF_2x2(int32_t *a_mf_00,
                      int32_t *a_mf_01,
                      int32_t *a_mf_10,
@@ -1111,6 +1128,17 @@ void nr_ue_csi_rs_procedures(PHY_VARS_NR_UE *ue,
                             csi_rs_estimated_channel_freq,
                             log2_maxh,
                             &rank_indicator);
+
+    const uint8_t requested_layers = nr_csi_get_dl_layers_override(ue);
+    if (requested_layers > 0) {
+      if (mapping_parms.ports <= 2) {
+        const int max_layers = max(1, min(requested_layers, mapping_parms.ports));
+        rank_indicator = max_layers - 1;
+        LOG_D(NR_PHY, "DL layers override: requested %u, effective %d\n", requested_layers, max_layers);
+      } else {
+        LOG_D(NR_PHY, "DL layers override ignored: CSI-RS RI estimation supports at most 2 ports\n");
+      }
+    }
   }
 
   uint8_t i1[3] = {0};

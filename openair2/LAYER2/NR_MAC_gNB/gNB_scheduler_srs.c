@@ -25,6 +25,17 @@ const uint16_t m_SRS[64] = { 4, 8, 12, 16, 16, 20, 24, 24, 28, 32, 36, 40, 48, 4
                              160, 160, 168, 176, 184, 192, 192, 192, 192, 208, 216, 224, 240, 240, 240, 240, 256, 256,
                              256, 264, 272, 272, 272 };
 
+int nr_mac_set_ul_layers_override(gNB_MAC_INST *mac, int layers)
+{
+  if (!mac || layers < 0 || layers > NR_MAX_NB_LAYERS)
+    return -1;
+
+  NR_SCHED_LOCK(&mac->sched_lock);
+  mac->ul_layers_override = layers;
+  NR_SCHED_UNLOCK(&mac->sched_lock);
+  return 0;
+}
+
 #ifdef SRS_DEBUG
 static void print128_number(const simde__m128i var)
 {
