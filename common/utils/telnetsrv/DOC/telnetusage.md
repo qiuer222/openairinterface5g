@@ -51,8 +51,8 @@ ciUE set_layers dl <1..4|auto>
 ```
 
 The override is process-wide and applies to new transmissions; HARQ retransmissions keep their original rank. `auto`
-restores the measured SRS/CSI-RS rank. Requested ranks are clamped to the UE configuration, antenna/SRS ports, and the
-implemented CSI/TPMI capabilities.
+restores the measured SRS/CSI-RS rank. Requested ranks are clamped to the configured maximum MIMO layers and the
+available antenna/SRS ports.
 
 # telnet server parameters
 The telnet server is using the [oai configuration module](../../../../common/config/DOC/config/rtusage.md). Telnet parameters must be specified in the `telnetsrv` section. Some parameters can be modified via the telnet telnet server command, as specified in the last column of the following table.

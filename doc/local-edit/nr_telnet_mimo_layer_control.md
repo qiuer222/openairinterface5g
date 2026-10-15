@@ -215,9 +215,9 @@ DL layers override cleared (auto)
 ```
 
 The effective DL rank is limited by the configured PDSCH maximum rank and by
-the current OAI nrUE CSI-RS implementation. The current implementation supports
-RI/PMI processing for up to two CSI-RS ports; the override is ignored for
-configurations with more than two CSI-RS ports.
+the number of configured CSI-RS ports. The override selects the requested rank
+when it is not greater than `maxMIMO_Layers_PDSCH`; higher requests are clamped
+to the configured maximum.
 
 ## 8. Verification
 

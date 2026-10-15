@@ -215,8 +215,7 @@ static int set_layers(char *buf, int debug, telnet_printfunc_t prnt)
     if (max_supported_layers <= 0)
       ERROR_MSG_RET("PDSCH MIMO configuration is not available\n");
 
-    // The current CSI-RS RI/PMI implementation supports one and two layers.
-    effective_layers = min(layers, min((int)max_supported_layers, 2));
+    effective_layers = min(layers, (int)max_supported_layers);
   }
 
   if (nr_csi_set_dl_layers_override(ue, effective_layers) != 0)

@@ -1131,13 +1131,9 @@ void nr_ue_csi_rs_procedures(PHY_VARS_NR_UE *ue,
 
     const uint8_t requested_layers = nr_csi_get_dl_layers_override(ue);
     if (requested_layers > 0) {
-      if (mapping_parms.ports <= 2) {
-        const int max_layers = max(1, min(requested_layers, mapping_parms.ports));
-        rank_indicator = max_layers - 1;
-        LOG_D(NR_PHY, "DL layers override: requested %u, effective %d\n", requested_layers, max_layers);
-      } else {
-        LOG_D(NR_PHY, "DL layers override ignored: CSI-RS RI estimation supports at most 2 ports\n");
-      }
+      const int max_layers = max(1, min(requested_layers, mapping_parms.ports));
+      rank_indicator = max_layers - 1;
+      LOG_D(NR_PHY, "DL layers override: requested %u, effective %d\n", requested_layers, max_layers);
     }
   }
 
