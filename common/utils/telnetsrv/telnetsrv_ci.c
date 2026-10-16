@@ -16,6 +16,7 @@
 #include <stdarg.h>
 #include <strings.h>
 
+#include "common/platform_types.h"
 #include "openair2/RRC/NR/rrc_gNB_UE_context.h"
 #include "openair2/LAYER2/NR_MAC_gNB/nr_mac_gNB.h"
 #include "openair2/LAYER2/nr_rlc/nr_rlc_oai_api.h"
@@ -405,7 +406,7 @@ static int set_pusch_target_snr(char *buf, int debug, telnet_printfunc_t prnt)
 
 static int set_layers(char *buf, int debug, telnet_printfunc_t prnt)
 {
-  UNUSED(debug);
+  (void)debug;
   char direction[8];
   char value[16];
   char extra;
