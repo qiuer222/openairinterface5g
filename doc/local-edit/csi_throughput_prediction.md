@@ -10,6 +10,21 @@ compares those metrics with measured throughput and MCS scheduled spectral
 efficiency. It also evaluates how well SVD predicted rank matches the actual
 scheduled layer count.
 
+## Current Throughput Prediction Additions
+
+- Throughput and MCS scheduled-SE prediction are analyzed separately for
+  second-level and position-level rows.
+- Capacity metrics use the raw `c16` channel matrix and one common noise power
+  derived from a configurable reference position.
+- UL adds an actual-precoder MMSE capped-MI metric using the numeric TPMI,
+  actual layer count, and recorded Qm.
+- `ul_tpmi_valid` is not required for this metric. TPMI 0 is interpreted as the
+  identity codebook precoder.
+- Per-layer post-SINR and capped-MI diagnostics, availability status, and
+  unavailable reasons are written to the processed CSV files.
+- The new metric is included in both throughput and MCS scheduled-SE
+  correlations, scatter plots, and split prediction figures.
+
 ## Input Data
 
 The experiment root contains one gNB archive and one matching UE archive:
@@ -115,6 +130,33 @@ This uses the same transmit-power normalization as Shannon capacity:
 each eigenvalue is divided by `N_t * N0`. Unlike SVD candidate capacity, `K`
 is not used again in the denominator.
 
+### UL Actual-Precoder MMSE Capped-MI SE
+
+For UL rows with a numeric `ul_tpmi`, the actual layer count selects the
+matching OAI 2-port or 4-port codebook precoder `W`. The `ul_tpmi_valid` flag
+is not used; TPMI 0 is treated as the identity codebook precoder. For each
+valid subcarrier:
+
+```text
+A(k) = H(k) W
+G(k) = (A(k)^H A(k) + N0 I)^-1 A(k)^H
+desired_l(k) = |g_l(k) a_l(k)|^2
+interference_l(k) = sum_{j != l} |g_l(k) a_j(k)|^2
+SINR_l(k) = desired_l(k)
+            / (interference_l(k) + N0 * ||g_l(k)||^2)
+```
+
+Post-SINR is limited to `10^(--post-sinr-cap-db / 10)` (30 dB by default) and
+mapped through the selected capped mutual-information approximation:
+
+```text
+I_l(k) = min(log2(1 + SINR_l(k)), Qm)
+C_mmse = mean_k sum_l I_l(k)
+```
+
+DL rows, missing/non-numeric TPMI, unsupported layer counts, and missing Qm
+produce `NaN` with an explicit status/reason. No SVD fallback is substituted.
+
 ### Position Covariance Capacity
 
 For each position, all second-level channel snapshots use the same raw channel
@@ -149,6 +191,7 @@ For each predictor:
 - `mcs_scheduled_se`
 - `shannon_capacity`
 - `svd_capacity`
+- `mmse_capped_mi_se` (UL, when numeric TPMI is available)
 - `selected_stream_capacity`
 - `position_covariance_capacity` (position-level only)
 
@@ -209,6 +252,9 @@ specific reference position with:
 Alternatively, provide an explicit common noise power with `--noise-power`.
 `--snr` is only a fallback reference SINR when no recorded `ul_sinr` or UE
 `sinr_dB` is available.
+
+The UL MMSE capped-MI post-SINR limit defaults to 30 dB and can be changed
+with `--post-sinr-cap-db`.
 
 Plot time series directly from existing processed CSVs:
 
@@ -300,6 +346,12 @@ The processed second-level CSV includes:
 | `nb_tx_antennas` | Number of transmit antenna ports in the channel matrix |
 | `max_rsrp_dBm` | Maximum valid per-antenna RSRP for the sample |
 | `mcs_scheduled_se` | `TBS / (NPRB * 12 * OFDM_symbols)` for the row |
+| `mmse_capped_mi_se` | Actual-UL-precoder MMSE capped-MI spectral efficiency |
+| `post_sinr_layer1_db` ... `post_sinr_layer4_db` | Per-layer mean capped MMSE post-SINR |
+| `mmse_capped_mi_layer1` ... `mmse_capped_mi_layer4` | Per-layer mean capped MI |
+| `mmse_metric_status`, `mmse_unavailable_reason` | Metric availability and failure reason |
+| `mmse_precoder_source` | Precoder source; currently `ul_tpmi_codebook` |
+| `mmse_sinr_cap_db` | Post-SINR cap used by the metric |
 
 The processed position-level CSV additionally includes:
 

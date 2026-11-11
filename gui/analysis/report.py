@@ -95,6 +95,12 @@ def write_final_report(
         "common `1/32768` conversion. The same fixed noise power is applied",
         "to every second-level and position-level sample.",
     )
+    mmse_cap = (
+        float(second_df["mmse_sinr_cap_db"].dropna().iloc[0])
+        if "mmse_sinr_cap_db" in second_df
+        and second_df["mmse_sinr_cap_db"].notna().any()
+        else float("nan")
+    )
     lines = [
         "# SRS/CSI Channel-Based Throughput Prediction Report",
         "",
@@ -107,6 +113,8 @@ def write_final_report(
         "normalized by transmit antennas and noise power",
         "- Position covariance capacity: mean covariance across second-level "
         "snapshots per subcarrier, then mean capacity over subcarriers",
+        "- UL MMSE capped-MI SE: actual TPMI codebook precoder, MMSE "
+        f"post-SINR, `{_fmt(mmse_cap)}` dB cap, and Qm-limited MI",
         "- MCS scheduled SE: `TBS / (NPRB * 12 * symbols)` per second-level "
         "sample, averaged within each position",
         f"- Fixed common noise power: `{noise_power}`",

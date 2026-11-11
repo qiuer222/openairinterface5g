@@ -30,6 +30,7 @@ from gui.analysis.capacity.shannon import (
 from gui.analysis.capacity.covariance import (
     covariance_capacity_from_channels,
 )
+from gui.analysis.capacity.mmse import mmse_capped_mi, ul_precoder
 from gui.analysis.capacity.svd import svd_capacities_from_eigenvalue_matrix
 from gui.analysis.csi_parser import load_channel_and_valid
 from gui.analysis.data_loader import (
@@ -61,6 +62,9 @@ MODE_AGGREGATED_COLUMNS = {
     "dl_ri",
     "dl_rv",
     "layers",
+    "mmse_metric_status",
+    "mmse_precoder_source",
+    "mmse_unavailable_reason",
     "new_data_indicator",
     "normalization_snr_source",
     "iperf_direction",
@@ -196,11 +200,17 @@ def _empty_channel_metrics(max_streams: int) -> dict:
             "selected_stream_capacity": float("nan"),
             "selected_stream_count": 0,
             "nb_tx_antennas": float("nan"),
+            "mmse_capped_mi_se": float("nan"),
+            "mmse_precoder_source": "",
+            "mmse_metric_status": "unavailable",
+            "mmse_unavailable_reason": "",
         }
     )
     for k in range(1, max_streams + 1):
         metrics[f"svd_capacity_k{k}"] = float("nan")
         metrics[f"stream_capacity_k{k}"] = float("nan")
+        metrics[f"post_sinr_layer{k}_db"] = float("nan")
+        metrics[f"mmse_capped_mi_layer{k}"] = float("nan")
     return metrics
 
 
@@ -409,11 +419,67 @@ def _channel_metrics(
     }
 
 
+def _apply_mmse_metric(
+    row: dict,
+    record: dict,
+    channel: np.ndarray,
+    valid: np.ndarray,
+    noise_power: float,
+    sinr_cap_db: float,
+) -> None:
+    """Fill the actual-UL-precoder MMSE capped-MI metric."""
+    if str(record.get("direction", "")).lower() != "ul":
+        row["mmse_metric_status"] = "unavailable"
+        row["mmse_unavailable_reason"] = "ul_actual_precoder_required"
+        return
+
+    try:
+        tpmi = int(float(record.get("ul_tpmi")))
+        layers = int(float(record.get("layers")))
+        modulation_order = int(float(record.get("ul_qm")))
+    except (TypeError, ValueError):
+        row["mmse_metric_status"] = "invalid"
+        row["mmse_unavailable_reason"] = "missing_numeric_tpmi_layers_or_qm"
+        return
+
+    try:
+        precoder = ul_precoder(tpmi, layers, channel.shape[1])
+        scaled_channel = normalize_channel(
+            channel,
+            noise_power=noise_power,
+            snr_db=None,
+        )
+        result = mmse_capped_mi(
+            scaled_channel,
+            valid,
+            precoder,
+            modulation_order,
+            noise_power,
+            sinr_cap_db,
+        )
+    except (ValueError, np.linalg.LinAlgError) as exc:
+        row["mmse_metric_status"] = "invalid"
+        row["mmse_unavailable_reason"] = str(exc)
+        return
+
+    row["mmse_capped_mi_se"] = result["se"]
+    row["mmse_precoder_source"] = "ul_tpmi_codebook"
+    row["mmse_metric_status"] = "ok"
+    row["mmse_unavailable_reason"] = ""
+    for index, (post_sinr_db, mi_value) in enumerate(
+        zip(result["post_sinr_db"], result["mi_per_layer"]),
+        start=1,
+    ):
+        row[f"post_sinr_layer{index}_db"] = float(post_sinr_db)
+        row[f"mmse_capped_mi_layer{index}"] = float(mi_value)
+
+
 def process_measurements(
     df: pd.DataFrame,
     noise_power: float,
     max_streams: int = 4,
     noise_reference: dict | None = None,
+    sinr_cap_db: float = 30.0,
 ) -> pd.DataFrame:
     """Build second-level rows with features, capacities, and validation data."""
     rows: List[dict] = []
@@ -452,6 +518,7 @@ def process_measurements(
             "normalization_snr_source": noise_reference.get(
                 "source", "fixed_noise"
             ),
+            "mmse_sinr_cap_db": sinr_cap_db,
         }
         row = {
             **metadata,
@@ -474,6 +541,14 @@ def process_measurements(
                 valid,
                 noise_power=noise_power,
                 max_streams=max_streams,
+            )
+            _apply_mmse_metric(
+                row,
+                record,
+                h,
+                valid,
+                noise_power,
+                sinr_cap_db,
             )
 
             features = metrics["features"]
@@ -693,6 +768,12 @@ def main() -> None:
         "the first position",
     )
     parser.add_argument(
+        "--post-sinr-cap-db",
+        type=float,
+        default=30.0,
+        help="upper post-SINR limit in dB for the UL MMSE capped-MI metric",
+    )
+    parser.add_argument(
         "--snr",
         type=float,
         default=None,
@@ -718,6 +799,11 @@ def main() -> None:
         raise SystemExit("--top-ratio must be in (0, 1]")
     if args.noise_power is not None and args.noise_power <= 0:
         raise SystemExit("--noise-power must be positive")
+    if (
+        not np.isfinite(args.post_sinr_cap_db)
+        or args.post_sinr_cap_db <= 0
+    ):
+        raise SystemExit("--post-sinr-cap-db must be positive and finite")
 
     try:
         measurements = discover_measurement_sets(
@@ -818,6 +904,7 @@ def main() -> None:
         noise_power=noise_power,
         max_streams=4,
         noise_reference=noise_reference,
+        sinr_cap_db=args.post_sinr_cap_db,
     )
     _write_dataframe(output_dir, "processed_second_level.csv", second_df)
     _write_dataframe(output_dir, "validation_report.csv", validation_df)

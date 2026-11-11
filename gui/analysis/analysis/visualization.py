@@ -38,6 +38,7 @@ METRIC_COLORS = {
     "mcs_scheduled_se": "#7f7f7f",
     "shannon_capacity": "#9467bd",
     "svd_capacity": "#ff7f0e",
+    "mmse_capped_mi_se": "#bcbd22",
     "svd_optimal_stream": "#e377c2",
     "selected_stream_capacity": "#17becf",
     "position_covariance_capacity": "#e377c2",
@@ -51,6 +52,7 @@ METRIC_MARKERS = {
     "mcs_scheduled_se": "o",
     "shannon_capacity": "D",
     "svd_capacity": "v",
+    "mmse_capped_mi_se": "*",
     "svd_optimal_stream": "P",
     "selected_stream_capacity": "X",
     "position_covariance_capacity": "P",
@@ -64,6 +66,7 @@ METRIC_NAMES = {
     "mcs_scheduled_se": "MCS scheduled SE",
     "shannon_capacity": "Shannon capacity",
     "svd_capacity": "SVD capacity",
+    "mmse_capped_mi_se": "MMSE capped-MI SE",
     "svd_optimal_stream": "SVD selected layers",
     "selected_stream_capacity": "Selected-stream capacity",
     "position_covariance_capacity": "Position covariance capacity",
@@ -517,6 +520,12 @@ def _plot_timeseries_mode(
     panels.extend([
         ("shannon_capacity", None, "Shannon capacity (bits/s/Hz)", None),
         ("svd_capacity", None, "SVD capacity (bits/s/Hz)", None),
+        (
+            "mmse_capped_mi_se",
+            None,
+            "MMSE capped-MI SE (bits/s/Hz)",
+            None,
+        ),
         (
             "selected_stream_capacity",
             None,

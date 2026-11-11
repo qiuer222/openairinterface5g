@@ -13,6 +13,7 @@ PREDICTORS = [
     "mcs_scheduled_se",
     "shannon_capacity",
     "svd_capacity",
+    "mmse_capped_mi_se",
     "selected_stream_capacity",
 ]
 POSITION_PREDICTORS = [*PREDICTORS, "position_covariance_capacity"]

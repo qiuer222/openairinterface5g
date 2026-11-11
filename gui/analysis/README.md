@@ -62,6 +62,11 @@ Correlations are reported separately for throughput and MCS scheduled SE.
 `mcs_scheduled_se` is calculated per row as
 `TBS / (NPRB * 12 * OFDM_symbols)` and averaged within each position.
 
+For UL rows with a numeric TPMI, `mmse_capped_mi_se` uses the actual codebook
+precoder, MMSE post-SINR, a configurable 30 dB SINR cap, and the recorded Qm
+as the mutual-information ceiling. Unsupported or DL rows remain `NaN` with
+an explicit status.
+
 Capacity formulas, field definitions, plotting conventions, and all CLI
 options are documented in
 `doc/local-edit/csi_throughput_prediction.md`.
