@@ -3,13 +3,12 @@
 
 The controller runs iperf3 in a QThread, appends every stdout line to the
 configured log file, and emits a parsed throughput sample for every interval
-line such as ``[  5]  0.00-1.00 sec  5.50 MBytes  46.1 Mbits/sec``.
-Final iperf3 summary lines such as ``0.00-30.00 sec ... sender`` are ignored.
+line with a positive duration, including 0.5-second samples. Final iperf3
+summary lines marked ``sender`` or ``receiver`` are ignored.
 """
 
 from __future__ import annotations
 
-import math
 import os
 import re
 import shutil
@@ -29,13 +28,15 @@ _BIT_SUFFIX = {"": 1.0, "k": 1e3, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12}
 
 
 def parse_iperf3_line(line: str) -> Optional[float]:
-    """Return bits/sec from a 1-second iperf3 interval line, or None."""
+    """Return bits/sec from a positive-duration iperf3 interval line."""
+    if re.search(r"\b(?:sender|receiver)\s*$", line):
+        return None
     m = _IPERF_INTERVAL_RE.search(line)
     if not m:
         return None
     start = float(m.group(1))
     end = float(m.group(2))
-    if not math.isclose(end - start, 1.0, rel_tol=0.0, abs_tol=1e-9):
+    if end <= start:
         return None
     try:
         return float(m.group(3)) * _BIT_SUFFIX[m.group(4)]
